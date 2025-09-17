@@ -13,7 +13,7 @@ def get_db_connection():
     return conn
 
 def init_db():
-    """Initializes the database and creates the products table if it doesn't exist."""
+    """Initializes the database and creates the products table and indexes if they don't exist."""
     conn = get_db_connection()
     cursor = conn.cursor()
     # Using TEXT for all IDs as they might be non-numeric
@@ -29,42 +29,86 @@ def init_db():
             shop TEXT
         )
     ''')
+    # Add indexes to speed up searching
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_name ON products (name)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_spec_name ON products (spec_name)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_product_id ON products (product_id)')
+    
     conn.commit()
     conn.close()
 
 def add_product_batch(products):
-    """Adds or replaces a batch of products in the database."""
+    """Adds or replaces a batch of products, returning stats on the operation."""
+    if not products:
+        return {'added': 0, 'updated': 0}
+
     conn = get_db_connection()
     cursor = conn.cursor()
+
+    cursor.execute('SELECT COUNT(*) FROM products')
+    initial_row_count = cursor.fetchone()[0]
+
     placeholders = ', '.join(['?'] * len(DB_COLUMNS))
     sql = f'''INSERT OR REPLACE INTO products ({", ".join(DB_COLUMNS)}) 
              VALUES ({placeholders})'''
     cursor.executemany(sql, products)
     conn.commit()
+
+    cursor.execute('SELECT COUNT(*) FROM products')
+    final_row_count = cursor.fetchone()[0]
     conn.close()
 
-def get_all_products():
-    """Retrieves all products from the database."""
+    net_rows_added = final_row_count - initial_row_count
+    rows_processed = len(products)
+    
+    # If net_rows_added is negative, it means deletions happened, which is not possible with INSERT OR REPLACE.
+    # We are only inserting or updating. So updated rows are the ones that didn't add to the count.
+    rows_updated = max(0, rows_processed - net_rows_added)
+
+    return {'added': net_rows_added, 'updated': rows_updated}
+
+def get_all_products(limit=50, offset=0):
+    """Retrieves a paginated list of all products from the database."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute(f'SELECT {", ".join(DB_COLUMNS)} FROM products ORDER BY shop, name')
+    cursor.execute(f'SELECT {", ".join(DB_COLUMNS)} FROM products ORDER BY shop, name LIMIT ? OFFSET ?', (limit, offset))
     products = cursor.fetchall()
     conn.close()
     return products
 
-def search_products(query):
-    """Searches for products by SKU or name."""
+def get_all_products_count():
+    """Gets the total count of products."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT COUNT(*) FROM products')
+    count = cursor.fetchone()[0]
+    conn.close()
+    return count
+
+def search_products(query, limit=50, offset=0):
+    """Searches for products by SKU or name with pagination."""
     conn = get_db_connection()
     cursor = conn.cursor()
     search_term = f'%{query}%'
-    # Search across more fields for better usability
     sql = f'''SELECT {", ".join(DB_COLUMNS)} FROM products 
              WHERE sku LIKE ? OR name LIKE ? OR spec_name LIKE ? OR product_id LIKE ?
-             ORDER BY shop, name'''
-    cursor.execute(sql, (search_term, search_term, search_term, search_term))
+             ORDER BY shop, name LIMIT ? OFFSET ?'''
+    cursor.execute(sql, (search_term, search_term, search_term, search_term, limit, offset))
     products = cursor.fetchall()
     conn.close()
     return products
+
+def search_products_count(query):
+    """Gets the total count of products for a search query."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    search_term = f'%{query}%'
+    sql = f'''SELECT COUNT(*) FROM products 
+             WHERE sku LIKE ? OR name LIKE ? OR spec_name LIKE ? OR product_id LIKE ?'''
+    cursor.execute(sql, (search_term, search_term, search_term, search_term))
+    count = cursor.fetchone()[0]
+    conn.close()
+    return count
 
 def delete_product(sku):
     """Deletes a product from the database by SKU."""
