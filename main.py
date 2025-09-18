@@ -18,11 +18,17 @@ HEADER_MAP = {
     'price': '价格',
     'final_price': '到手价',
     'quantity': '平台库存',
-    'shop': '店铺'
+    'shop': '店铺',
+    'category': '分类',
+    'warehouse': '仓库',
+    'short_name': '简称',
+    'min_price': '最低价',
+    'purchase_price': '采购价'
 }
 DISPLAY_COLUMNS = [
     'shop', 'product_id', 'spec_id', 'sku', 'price', 
-    'final_price', 'quantity', 'spec_name', 'name'
+    'final_price', 'quantity', 'spec_name', 'name',
+    'category', 'warehouse', 'short_name', 'min_price', 'purchase_price'
 ]
 
 # 优惠券相关常量
@@ -612,7 +618,7 @@ class App(ttk.Window):
     
     def setup_search_placeholder(self):
         """设置搜索框占位符"""
-        self.placeholder_text = "按 SKU、货品ID、名称、规格等搜索..."
+        self.placeholder_text = "按 SKU、货品ID、名称、规格、分类、仓库、简称等搜索..."
         self.placeholder_color = '#888'
         try: 
             self.default_fg_color = self.search_entry.cget("foreground")
@@ -706,7 +712,12 @@ class App(ttk.Window):
             'final_price': {'width': 100, 'anchor': CENTER},
             'quantity': {'width': 100, 'anchor': CENTER},
             'spec_name': {'width': 220, 'anchor': CENTER},
-            'name': {'width': 400, 'anchor': CENTER}
+            'name': {'width': 400, 'anchor': CENTER},
+            'category': {'width': 120, 'anchor': CENTER},
+            'warehouse': {'width': 120, 'anchor': CENTER},
+            'short_name': {'width': 150, 'anchor': CENTER},
+            'min_price': {'width': 100, 'anchor': CENTER},
+            'purchase_price': {'width': 100, 'anchor': CENTER}
         }
         
         # 列图标映射
@@ -719,7 +730,12 @@ class App(ttk.Window):
             'final_price': '🎯',
             'quantity': '📊',
             'spec_name': '📝',
-            'name': '🏷️'
+            'name': '🏷️',
+            'category': '📂',
+            'warehouse': '🏭',
+            'short_name': '🏷️',
+            'min_price': '💸',
+            'purchase_price': '💵'
         }
         
         for col in DISPLAY_COLUMNS:
@@ -944,7 +960,37 @@ class App(ttk.Window):
     
     def export_data(self):
         """导出数据功能"""
-        messagebox.showinfo("提示", "导出功能开发中...", parent=self)
+        try:
+            # 选择保存文件路径
+            file_path = filedialog.asksaveasfilename(
+                title="导出数据",
+                defaultextension=".xlsx",
+                filetypes=[("Excel文件", "*.xlsx"), ("所有文件", "*.*")]
+            )
+            
+            if not file_path:
+                return
+            
+            # 获取所有数据
+            all_products = database.get_all_products(limit=999999)  # 获取所有数据
+            
+            if not all_products:
+                messagebox.showwarning("警告", "没有数据可导出")
+                return
+            
+            # 转换为DataFrame
+            df = pd.DataFrame(all_products, columns=database.DB_COLUMNS)
+            
+            # 重命名列为中文
+            df_renamed = df.rename(columns=HEADER_MAP)
+            
+            # 导出到Excel
+            df_renamed.to_excel(file_path, index=False, sheet_name='商品数据')
+            
+            messagebox.showinfo("成功", f"数据已导出到: {file_path}")
+            
+        except Exception as e:
+            messagebox.showerror("错误", f"导出失败: {str(e)}")
     
     def _create_overview_page(self):
         """创建总览页面"""
@@ -1704,10 +1750,42 @@ class App(ttk.Window):
 
     def _threaded_import(self, file_path):
         try:
-            sheet1_dtypes = { '规格ID': str, '规格编码': str }; sheet2_dtypes = { '无效的规格ID': str }; sheet3_dtypes = { '启用的规格编码': str }
+            sheet1_dtypes = { '规格ID': str, '规格编码': str }
+            sheet2_dtypes = { '无效的规格ID': str }
+            sheet3_dtypes = { '启用的规格编码': str, '分类': str, '仓库': str, '简称': str, '最低价': str }
+            sheet4_dtypes = { '简称': str, '采购价': str }
+            
             df = pd.read_excel(file_path, sheet_name='Sheet1', dtype=sheet1_dtypes)
             df_sheet2 = pd.read_excel(file_path, sheet_name='Sheet2', dtype=sheet2_dtypes)
             df_sheet3 = pd.read_excel(file_path, sheet_name='Sheet3', dtype=sheet3_dtypes)
+            
+            # 尝试读取Sheet4，如果不存在则创建空DataFrame
+            try:
+                df_sheet4 = pd.read_excel(file_path, sheet_name='Sheet4', dtype=sheet4_dtypes)
+            except:
+                df_sheet4 = pd.DataFrame(columns=['简称', '采购价'])
+            
+            # 处理Sheet3的额外字段数据
+            sheet3_extra_data = {}
+            if not df_sheet3.empty:
+                for _, row in df_sheet3.iterrows():
+                    sku_code = str(row.get('启用的规格编码', '')).strip()
+                    if sku_code and sku_code != '':
+                        sheet3_extra_data[sku_code] = {
+                            'category': str(row.get('分类', '')).strip(),
+                            'warehouse': str(row.get('仓库', '')).strip(), 
+                            'short_name': str(row.get('简称', '')).strip(),
+                            'min_price': str(row.get('最低价', '')).strip()
+                        }
+            
+            # 处理Sheet4的采购价数据
+            sheet4_purchase_data = {}
+            if not df_sheet4.empty:
+                for _, row in df_sheet4.iterrows():
+                    short_name = str(row.get('简称', '')).strip()
+                    if short_name and short_name != '':
+                        sheet4_purchase_data[short_name] = str(row.get('采购价', '')).strip()
+            
             report_df = df.copy(); total_rows = len(report_df)
             invalid_ids = set(df_sheet2['无效的规格ID'].dropna().astype(str).str.strip().str.lower())
             enabled_codes = set(df_sheet3['启用的规格编码'].dropna().astype(str).str.strip())
@@ -1715,6 +1793,29 @@ class App(ttk.Window):
             # 更新数据库中的筛选条件
             database.update_invalid_spec_ids(invalid_ids)
             database.update_enabled_skus(enabled_codes)
+            
+            # 添加新字段到主数据
+            report_df['分类'] = ''
+            report_df['仓库'] = ''
+            report_df['简称'] = ''
+            report_df['最低价'] = ''
+            report_df['采购价'] = ''
+            
+            # 根据规格编码合并Sheet3的数据
+            for index, row in report_df.iterrows():
+                sku_code = str(row.get('规格编码', '')).strip()
+                if sku_code in sheet3_extra_data:
+                    extra_data = sheet3_extra_data[sku_code]
+                    report_df.at[index, '分类'] = extra_data['category']
+                    report_df.at[index, '仓库'] = extra_data['warehouse']
+                    report_df.at[index, '简称'] = extra_data['short_name']
+                    report_df.at[index, '最低价'] = extra_data['min_price']
+                    
+                    # 根据简称从Sheet4获取采购价
+                    short_name = extra_data['short_name']
+                    if short_name in sheet4_purchase_data:
+                        report_df.at[index, '采购价'] = sheet4_purchase_data[short_name]
+            
             report_df['_clean_spec_id'] = report_df['规格ID'].astype(str).str.strip().str.lower()
             report_df['_clean_sku'] = report_df['规格编码'].astype(str).str.strip()
             reasons = [('无效的规格ID' if row['_clean_spec_id'] in invalid_ids else ('规格编码未启用' if row['_clean_sku'] != '*' and row['_clean_sku'] not in enabled_codes else '')) for _, row in report_df.iterrows()]

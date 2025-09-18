@@ -4,7 +4,8 @@ import json
 # The order of columns used throughout the database logic
 DB_COLUMNS = [
     'sku', 'product_id', 'spec_id', 'name', 
-    'spec_name', 'price', 'quantity', 'shop'
+    'spec_name', 'price', 'quantity', 'shop',
+    'category', 'warehouse', 'short_name', 'min_price', 'purchase_price'
 ]
 
 # 优惠券表列定义
@@ -34,7 +35,12 @@ def init_db():
             spec_name TEXT,
             price REAL,
             quantity INTEGER,
-            shop TEXT
+            shop TEXT,
+            category TEXT,
+            warehouse TEXT,
+            short_name TEXT,
+            min_price REAL,
+            purchase_price REAL
         )
     ''')
     
@@ -61,6 +67,40 @@ def init_db():
         # 如果列不存在，添加它
         cursor.execute("ALTER TABLE coupons ADD COLUMN product_ids TEXT")
         print("数据库已更新：添加 product_ids 列")
+    
+    # 检查并添加新的商品字段
+    new_columns = [
+        ('category', 'TEXT'),
+        ('warehouse', 'TEXT'), 
+        ('short_name', 'TEXT'),
+        ('min_price', 'REAL'),
+        ('purchase_price', 'REAL')
+    ]
+    
+    for column_name, column_type in new_columns:
+        try:
+            cursor.execute(f"SELECT {column_name} FROM products LIMIT 1")
+        except sqlite3.OperationalError:
+            # 如果列不存在，添加它
+            cursor.execute(f"ALTER TABLE products ADD COLUMN {column_name} {column_type}")
+            print(f"数据库已更新：添加 {column_name} 列")
+    
+    # 检查并添加新的商品字段
+    new_columns = [
+        ('category', 'TEXT'),
+        ('warehouse', 'TEXT'), 
+        ('short_name', 'TEXT'),
+        ('min_price', 'REAL'),
+        ('purchase_price', 'REAL')
+    ]
+    
+    for column_name, column_type in new_columns:
+        try:
+            cursor.execute(f"SELECT {column_name} FROM products LIMIT 1")
+        except sqlite3.OperationalError:
+            # 如果列不存在，添加它
+            cursor.execute(f"ALTER TABLE products ADD COLUMN {column_name} {column_type}")
+            print(f"数据库已更新：添加 {column_name} 列")
     
     # Add indexes to speed up searching
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_name ON products (name)')
@@ -143,9 +183,11 @@ def search_products(query, limit=50, offset=0):
     cursor = conn.cursor()
     search_term = f'%{query}%'
     sql = f'''SELECT {", ".join(DB_COLUMNS)} FROM products 
-             WHERE sku LIKE ? OR name LIKE ? OR spec_name LIKE ? OR product_id LIKE ?
+             WHERE sku LIKE ? OR name LIKE ? OR spec_name LIKE ? OR product_id LIKE ? 
+             OR category LIKE ? OR warehouse LIKE ? OR short_name LIKE ?
              ORDER BY shop, name LIMIT ? OFFSET ?'''
-    cursor.execute(sql, (search_term, search_term, search_term, search_term, limit, offset))
+    cursor.execute(sql, (search_term, search_term, search_term, search_term, 
+                        search_term, search_term, search_term, limit, offset))
     products = cursor.fetchall()
     conn.close()
     return products
@@ -156,8 +198,10 @@ def search_products_count(query):
     cursor = conn.cursor()
     search_term = f'%{query}%'
     sql = f'''SELECT COUNT(*) FROM products 
-             WHERE sku LIKE ? OR name LIKE ? OR spec_name LIKE ? OR product_id LIKE ?'''
-    cursor.execute(sql, (search_term, search_term, search_term, search_term))
+             WHERE sku LIKE ? OR name LIKE ? OR spec_name LIKE ? OR product_id LIKE ?
+             OR category LIKE ? OR warehouse LIKE ? OR short_name LIKE ?'''
+    cursor.execute(sql, (search_term, search_term, search_term, search_term,
+                        search_term, search_term, search_term))
     count = cursor.fetchone()[0]
     conn.close()
     return count
