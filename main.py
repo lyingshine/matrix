@@ -23,12 +23,15 @@ HEADER_MAP = {
     'warehouse': '仓库',
     'short_name': '简称',
     'min_price': '最低价',
-    'purchase_price': '采购价'
+    'purchase_price': '采购价',
+    'shipping_fee': '快递费',
+    'gross_margin_rate': '毛利率',
+    'net_margin_rate': '净利率'
 }
 DISPLAY_COLUMNS = [
     'shop', 'product_id', 'spec_id', 'sku', 'price', 
-    'final_price', 'quantity', 'spec_name', 'name',
-    'category', 'warehouse', 'short_name', 'min_price', 'purchase_price'
+    'final_price', 'purchase_price', 'shipping_fee', 'gross_margin_rate', 'net_margin_rate',
+    'quantity', 'spec_name', 'name', 'category', 'warehouse', 'short_name', 'min_price'
 ]
 
 # 优惠券相关常量
@@ -409,7 +412,8 @@ class App(ttk.Window):
         nav_buttons = [
             {"text": "📊  总览", "page": "overview", "desc": "数据概览与统计"},
             {"text": "📦  SKU列表", "page": "sku_list", "desc": "商品管理与编辑"},
-            {"text": "🎫  优惠券", "page": "coupons", "desc": "优惠券配置管理"}
+            {"text": "🎫  优惠券", "page": "coupons", "desc": "优惠券配置管理"},
+            {"text": "💰  价格分析", "page": "price_analysis", "desc": "利润分析与计算"}
         ]
         
         self.nav_buttons = {}
@@ -488,6 +492,9 @@ class App(ttk.Window):
         
         # 优惠券页面
         self.pages["coupons"] = self._create_coupons_page()
+        
+        # 价格分析页面
+        self.pages["price_analysis"] = self._create_price_analysis_page()
     
     def show_page(self, page_name):
         """显示指定页面"""
@@ -717,7 +724,10 @@ class App(ttk.Window):
             'warehouse': {'width': 120, 'anchor': CENTER},
             'short_name': {'width': 150, 'anchor': CENTER},
             'min_price': {'width': 100, 'anchor': CENTER},
-            'purchase_price': {'width': 100, 'anchor': CENTER}
+            'purchase_price': {'width': 100, 'anchor': CENTER},
+            'shipping_fee': {'width': 80, 'anchor': CENTER},
+            'gross_margin_rate': {'width': 100, 'anchor': CENTER},
+            'net_margin_rate': {'width': 100, 'anchor': CENTER}
         }
         
         # 列图标映射
@@ -735,7 +745,10 @@ class App(ttk.Window):
             'warehouse': '🏭',
             'short_name': '🏷️',
             'min_price': '💸',
-            'purchase_price': '💵'
+            'purchase_price': '💵',
+            'shipping_fee': '�',
+            'gross_margin_rate': '�',
+            'net_margin_rate': '💹'
         }
         
         for col in DISPLAY_COLUMNS:
@@ -1431,6 +1444,313 @@ class App(ttk.Window):
         
         return card_container
     
+    def _create_price_analysis_page(self):
+        """创建价格分析页面"""
+        page = ttk.Frame(self.content_area)
+        
+        # 页面标题区域
+        header_area = ttk.Frame(page, padding=(0, 0, 0, 25))
+        header_area.pack(fill=X)
+        
+        # 标题容器
+        title_container = ttk.Frame(header_area)
+        title_container.pack(fill=X)
+        
+        # 主标题
+        main_title = ttk.Label(title_container, text="价格分析", 
+                             font=("Microsoft YaHei UI", 20, "bold"))
+        main_title.pack(side=LEFT)
+        
+        # 副标题
+        sub_title = ttk.Label(title_container, text="Price Analysis", 
+                            font=("Microsoft YaHei UI", 11),
+                            foreground="#888")
+        sub_title.pack(side=LEFT, padx=(15, 0), pady=(5, 0))
+        
+        # 刷新按钮
+        refresh_btn = ttk.Button(title_container, text="🔄 刷新", 
+                               command=self._refresh_price_analysis,
+                               bootstyle="outline-primary", width=10)
+        refresh_btn.pack(side=RIGHT)
+        
+        # 计算公式说明区域
+        formula_area = ttk.Frame(page, padding=(0, 0, 0, 20))
+        formula_area.pack(fill=X)
+        
+        # 公式说明卡片
+        formula_card = ttk.Frame(formula_area, padding=(20, 15))
+        formula_card.pack(fill=X)
+        
+        formula_title = ttk.Label(formula_card, text="💡 计算公式说明", 
+                                font=("Microsoft YaHei UI", 12, "bold"))
+        formula_title.pack(anchor=tk.W, pady=(0, 10))
+        
+        formulas = [
+            "净利润 = 到手价 - 采购价 - 快递费 - 杂费",
+            "快递费 = 到手价 ≥ 150元 ? 30元 : 2元",
+            "杂费 = 售后费用 + 管理费用 + 平台费用",
+            "售后费用 = 到手价 × 2%",
+            "管理费用 = 到手价 × 7%", 
+            "平台费用 = 到手价 × 1%"
+        ]
+        
+        for formula in formulas:
+            formula_label = ttk.Label(formula_card, text=f"• {formula}", 
+                                    font=("Microsoft YaHei UI", 10))
+            formula_label.pack(anchor=tk.W, pady=(2, 0))
+        
+        # 统计卡片区域
+        stats_area = ttk.Frame(page, padding=(0, 0, 0, 20))
+        stats_area.pack(fill=X)
+        
+        # 统计卡片容器
+        stats_container = ttk.Frame(stats_area)
+        stats_container.pack(fill=X)
+        
+        # 价格分析统计卡片
+        analysis_stats = [
+            {"title": "总商品数", "value": "0", "icon": "📦", "color": "#4A90E2", "key": "total_products"},
+            {"title": "盈利商品", "value": "0", "icon": "📈", "color": "#7ED321", "key": "profitable_products"},
+            {"title": "亏损商品", "value": "0", "icon": "📉", "color": "#D0021B", "key": "loss_products"},
+            {"title": "平均利润率", "value": "0%", "icon": "💰", "color": "#F5A623", "key": "avg_profit_rate"}
+        ]
+        
+        # 存储统计卡片引用
+        self.analysis_stats_cards = {}
+        
+        for i, stat in enumerate(analysis_stats):
+            card = self._create_analysis_stat_card(stats_container, stat)
+            card.grid(row=0, column=i, padx=(0, 15) if i < 3 else (0, 0), sticky="ew")
+            self.analysis_stats_cards[stat["key"]] = card
+        
+        # 配置网格权重
+        for i in range(4):
+            stats_container.grid_columnconfigure(i, weight=1)
+        
+        # 价格分析表格区域
+        table_area = ttk.Frame(page)
+        table_area.pack(fill=BOTH, expand=True)
+        
+        # 表格标题栏
+        table_header = ttk.Frame(table_area, padding=(0, 0, 0, 15))
+        table_header.pack(fill=X)
+        
+        # 表格标题
+        table_title = ttk.Label(table_header, text="商品利润分析详情", 
+                              font=("Microsoft YaHei UI", 14, "bold"))
+        table_title.pack(side=LEFT)
+        
+        # 筛选按钮组
+        filter_frame = ttk.Frame(table_header)
+        filter_frame.pack(side=RIGHT)
+        
+        filter_buttons = [
+            {"text": "全部", "cmd": lambda: self._filter_analysis("all"), "style": "primary"},
+            {"text": "盈利", "cmd": lambda: self._filter_analysis("profit"), "style": "success"},
+            {"text": "亏损", "cmd": lambda: self._filter_analysis("loss"), "style": "danger"}
+        ]
+        
+        for btn_config in filter_buttons:
+            btn = ttk.Button(filter_frame, text=btn_config["text"], 
+                           command=btn_config["cmd"],
+                           bootstyle=f"outline-{btn_config['style']}", width=8)
+            btn.pack(side=LEFT, padx=(0, 5))
+            self.add_button_hover_effect(btn)
+        
+        # 表格容器
+        table_container = ttk.Frame(table_area)
+        table_container.pack(fill=BOTH, expand=True)
+        
+        # 创建价格分析表格
+        self._create_price_analysis_table(table_container)
+        
+        # 初始化数据加载
+        self.after(100, self._refresh_price_analysis)
+        
+        return page
+    
+    def _create_analysis_stat_card(self, parent, config):
+        """创建价格分析统计卡片"""
+        card_container = ttk.Frame(parent)
+        
+        card = ttk.Frame(card_container, padding=(15, 12))
+        card.pack(fill=BOTH, expand=True)
+        
+        # 图标和数值
+        top_frame = ttk.Frame(card)
+        top_frame.pack(fill=X, pady=(0, 8))
+        
+        icon_label = ttk.Label(top_frame, text=config["icon"], 
+                              font=("Microsoft YaHei UI", 20))
+        icon_label.pack(side=LEFT)
+        
+        value_label = ttk.Label(top_frame, text=config["value"], 
+                               font=("Microsoft YaHei UI", 24, "bold"),
+                               foreground=config["color"])
+        value_label.pack(side=RIGHT)
+        
+        # 标题
+        title_label = ttk.Label(card, text=config["title"],
+                               font=("Microsoft YaHei UI", 11, "bold"))
+        title_label.pack(anchor=tk.W)
+        
+        self.add_card_hover_effect(card)
+        
+        # 将value_label附加到card_container以便后续访问
+        card_container.value_label = value_label
+        
+        return card_container
+    
+    def _create_price_analysis_table(self, parent):
+        """创建价格分析表格"""
+        # 表格框架
+        tree_frame = ttk.Frame(parent)
+        tree_frame.pack(fill=BOTH, expand=True)
+        
+        # 定义分析表格的列
+        analysis_columns = [
+            'shop', 'product_id', 'name', 'final_price', 'purchase_price', 
+            'shipping_fee', 'misc_fee', 'net_profit', 'profit_rate'
+        ]
+        
+        # 创建表格
+        self.analysis_tree = ttk.Treeview(tree_frame, columns=analysis_columns, show="headings", 
+                                        style="Enhanced.Treeview", height=15)
+        
+        # 列配置
+        analysis_column_configs = {
+            'shop': {'width': 100, 'anchor': CENTER},
+            'product_id': {'width': 120, 'anchor': CENTER},
+            'name': {'width': 300, 'anchor': CENTER},
+            'final_price': {'width': 100, 'anchor': CENTER},
+            'purchase_price': {'width': 100, 'anchor': CENTER},
+            'shipping_fee': {'width': 80, 'anchor': CENTER},
+            'misc_fee': {'width': 80, 'anchor': CENTER},
+            'net_profit': {'width': 100, 'anchor': CENTER},
+            'profit_rate': {'width': 100, 'anchor': CENTER}
+        }
+        
+        # 列标题映射
+        analysis_header_map = {
+            'shop': '🏪 店铺',
+            'product_id': '🆔 货品ID',
+            'name': '🏷️ 商品名称',
+            'final_price': '🎯 到手价',
+            'purchase_price': '💵 采购价',
+            'shipping_fee': '🚚 快递费',
+            'misc_fee': '📊 杂费',
+            'net_profit': '💰 净利润',
+            'profit_rate': '📈 利润率'
+        }
+        
+        for col in analysis_columns:
+            header_text = analysis_header_map.get(col, col)
+            self.analysis_tree.heading(col, text=header_text, anchor=CENTER)
+            config = analysis_column_configs.get(col, {'width': 100, 'anchor': CENTER})
+            self.analysis_tree.column(col, **config, minwidth=50)
+        
+        # 滚动条
+        v_scrollbar3 = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, 
+                                   command=self.analysis_tree.yview)
+        h_scrollbar3 = ttk.Scrollbar(tree_frame, orient=tk.HORIZONTAL, 
+                                   command=self.analysis_tree.xview)
+        self.analysis_tree.configure(yscrollcommand=v_scrollbar3.set, 
+                                   xscrollcommand=h_scrollbar3.set)
+        
+        # 布局
+        self.analysis_tree.grid(row=0, column=0, sticky="nsew")
+        v_scrollbar3.grid(row=0, column=1, sticky="ns")
+        h_scrollbar3.grid(row=1, column=0, sticky="ew")
+        
+        tree_frame.grid_rowconfigure(0, weight=1)
+        tree_frame.grid_columnconfigure(0, weight=1)
+    
+    def _refresh_price_analysis(self):
+        """刷新价格分析数据"""
+        try:
+            # 清空现有数据
+            for item in self.analysis_tree.get_children():
+                self.analysis_tree.delete(item)
+            
+            # 获取所有商品数据
+            all_products = database.get_all_products(limit=999999)
+            
+            total_products = 0
+            profitable_products = 0
+            loss_products = 0
+            total_profit_rate = 0
+            
+            for product in all_products:
+                product_dict = dict(zip(database.DB_COLUMNS, product))
+                
+                # 计算到手价（应用优惠券）
+                price = float(product_dict.get('price', 0) or 0)
+                shop = product_dict.get('shop', '')
+                product_id = product_dict.get('product_id', '')
+                final_price = database.calculate_final_price(price, shop, product_id)
+                
+                purchase_price = float(product_dict.get('purchase_price', 0) or 0)
+                
+                # 跳过没有价格数据的商品
+                if final_price <= 0 or purchase_price <= 0:
+                    continue
+                
+                # 计算各项费用
+                shipping_fee = 30 if final_price >= 150 else 2
+                after_sales_fee = final_price * 0.02  # 2%
+                management_fee = final_price * 0.07   # 7%
+                platform_fee = final_price * 0.01    # 1%
+                misc_fee = after_sales_fee + management_fee + platform_fee
+                
+                # 计算净利润
+                net_profit = final_price - purchase_price - shipping_fee - misc_fee
+                
+                # 计算利润率
+                profit_rate = (net_profit / final_price) * 100 if final_price > 0 else 0
+                
+                # 统计数据
+                total_products += 1
+                if net_profit > 0:
+                    profitable_products += 1
+                else:
+                    loss_products += 1
+                total_profit_rate += profit_rate
+                
+                # 格式化显示数据
+                display_data = [
+                    product_dict.get('shop', ''),
+                    product_dict.get('product_id', ''),
+                    product_dict.get('name', ''),
+                    f"¥{final_price:.2f}",
+                    f"¥{purchase_price:.2f}",
+                    f"¥{shipping_fee:.2f}",
+                    f"¥{misc_fee:.2f}",
+                    f"¥{net_profit:.2f}",
+                    f"{profit_rate:.1f}%"
+                ]
+                
+                # 插入数据到表格
+                self.analysis_tree.insert("", tk.END, values=display_data)
+            
+            # 更新统计卡片
+            avg_profit_rate = total_profit_rate / total_products if total_products > 0 else 0
+            
+            if hasattr(self, 'analysis_stats_cards'):
+                self.analysis_stats_cards['total_products'].value_label.config(text=str(total_products))
+                self.analysis_stats_cards['profitable_products'].value_label.config(text=str(profitable_products))
+                self.analysis_stats_cards['loss_products'].value_label.config(text=str(loss_products))
+                self.analysis_stats_cards['avg_profit_rate'].value_label.config(text=f"{avg_profit_rate:.1f}%")
+                
+        except Exception as e:
+            print(f"刷新价格分析数据时出错: {e}")
+            messagebox.showerror("错误", f"刷新价格分析数据失败: {str(e)}")
+    
+    def _filter_analysis(self, filter_type):
+        """筛选价格分析数据"""
+        # 这里可以实现筛选逻辑
+        # 暂时重新加载所有数据
+        self._refresh_price_analysis()
+    
     def open_coupon_manager(self):
         """打开优惠券管理窗口（保持兼容性）"""
         self.show_page("coupons")
@@ -1569,11 +1889,36 @@ class App(ttk.Window):
                         product_dict.get('product_id', '')
                     )
                     
-                    # 构建显示数据，包含到手价
+                    # 计算毛利率、净利率和快递费
+                    purchase_price = float(product_dict.get('purchase_price', 0) or 0)
+                    shipping_fee_display = ""
+                    gross_margin_rate = ""
+                    net_margin_rate = ""
+                    
+                    if final_price > 0 and purchase_price > 0:
+                        # 计算快递费
+                        shipping_fee = 30 if final_price >= 150 else 2
+                        shipping_fee_display = f"¥{shipping_fee:.2f}"
+                        
+                        # 计算毛利率 = (到手价 - 采购价 - 快递费) / 到手价
+                        gross_margin = final_price - purchase_price - shipping_fee
+                        gross_margin_rate = f"{(gross_margin / final_price * 100):.1f}%"
+                        
+                        # 计算杂费率 = 售后费用(2%) + 管理费用(7%) + 平台费用(1%) = 10%
+                        misc_fee_rate = 0.10  # 10%
+                        
+                        # 计算净利率 = 毛利率 - 杂费率
+                        net_margin_rate_value = (gross_margin / final_price) - misc_fee_rate
+                        net_margin_rate = f"{(net_margin_rate_value * 100):.1f}%"
+                    
+                    # 构建显示数据，包含到手价、采购价、快递费、毛利率和净利率
                     display_data = {}
                     for col in database.DB_COLUMNS:
                         display_data[col] = product_dict[col]
                     display_data['final_price'] = final_price
+                    display_data['shipping_fee'] = shipping_fee_display
+                    display_data['gross_margin_rate'] = gross_margin_rate
+                    display_data['net_margin_rate'] = net_margin_rate
                     
                     reordered_values = [display_data.get(col, '') for col in DISPLAY_COLUMNS]
                     items_to_insert.append(tuple(reordered_values))
