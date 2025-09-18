@@ -15,13 +15,27 @@ HEADER_MAP = {
     'name': '货品名称',
     'spec_name': '规格名称',
     'price': '价格',
+    'final_price': '到手价',
     'quantity': '平台库存',
     'shop': '店铺'
 }
 DISPLAY_COLUMNS = [
     'shop', 'product_id', 'spec_id', 'sku', 'price', 
-    'quantity', 'spec_name', 'name'
+    'final_price', 'quantity', 'spec_name', 'name'
 ]
+
+# 优惠券相关常量
+COUPON_HEADER_MAP = {
+    'id': 'ID',
+    'shop': '店铺',
+    'coupon_type': '类型',
+    'amount': '面额',
+    'min_price': '最低消费',
+    'start_date': '开始日期',
+    'end_date': '结束日期',
+    'description': '描述',
+    'is_active': '状态'
+}
 PAGE_SIZE = 100  # Number of items to load per page - 增加页面大小减少加载次数
 SKELETON_ROWS = 15 # Number of placeholder rows to show
 
@@ -122,8 +136,8 @@ class App(ttk.Window):
     def __init__(self):
         super().__init__(themename="darkly")
         self.title("Matrix · 商品信息管理系统")
-        self.geometry("1500x850")
-        self.minsize(1200, 700)
+        self.geometry("1600x900")
+        self.minsize(1300, 750)
         
         # 设置窗口图标和样式
         try:
@@ -139,6 +153,15 @@ class App(ttk.Window):
             self.wm_attributes("-alpha", 0.98)  # 轻微透明度
         except:
             pass
+        
+        # 当前选中的页面
+        self.current_page = "overview"
+        
+        # 生成调试报告变量
+        self.generate_report_var = tk.BooleanVar()
+        
+        # 初始化action_buttons列表
+        self.action_buttons = []
 
         # --- State Management for Lazy Loading ---
         self.is_busy = False
@@ -151,7 +174,6 @@ class App(ttk.Window):
         self.last_clicked_column_index = -1
 
         self._build_ui()
-        self.start_new_load()
 
     def _build_ui(self):
         # --- 主容器 ---
@@ -162,284 +184,153 @@ class App(ttk.Window):
         header_frame = ttk.Frame(main_container, padding=(30, 25, 30, 20))
         header_frame.pack(fill=X)
         
-        # 左侧标题区域
+        # 创建渐变效果的标题区域
         title_container = ttk.Frame(header_frame)
         title_container.pack(side=LEFT, fill=X, expand=True)
         
+        # 主标题
         title_label = ttk.Label(title_container, text="Matrix", 
-                               font=("Microsoft YaHei UI", 22, "bold"))
+                               font=("Microsoft YaHei UI", 26, "bold"))
         title_label.pack(side=LEFT)
         
+        # 副标题
         subtitle_label = ttk.Label(title_container, text="商品信息管理系统", 
-                                 font=("Microsoft YaHei UI", 13))
-        subtitle_label.pack(side=LEFT, padx=(15, 0))
+                                 font=("Microsoft YaHei UI", 14),
+                                 foreground="#B0B0B0")
+        subtitle_label.pack(side=LEFT, padx=(20, 0), pady=(5, 0))
         
-        # 右侧版本信息
-        version_label = ttk.Label(header_frame, text="v1.0", 
-                                font=("Microsoft YaHei UI", 9),
+        # 右侧信息区域
+        info_container = ttk.Frame(header_frame)
+        info_container.pack(side=RIGHT)
+        
+        # 版本标签
+        version_label = ttk.Label(info_container, text="v2.0", 
+                                font=("Microsoft YaHei UI", 10),
                                 foreground="#888")
-        version_label.pack(side=RIGHT)
+        version_label.pack(anchor=tk.E)
         
-        # 分隔线
-        ttk.Separator(main_container, orient=HORIZONTAL).pack(fill=X, padx=30)
+        # 当前用户（示例）
+        user_label = ttk.Label(info_container, text="管理员", 
+                             font=("Microsoft YaHei UI", 9),
+                             foreground="#666")
+        user_label.pack(anchor=tk.E, pady=(2, 0))
         
-        # --- 操作栏 ---
-        top_frame = ttk.Frame(main_container, padding=(30, 20, 30, 25))
-        top_frame.pack(fill=X)
+        # 优雅的分隔线
+        separator_frame = ttk.Frame(main_container, height=2)
+        separator_frame.pack(fill=X, padx=30, pady=(10, 0))
+        ttk.Separator(separator_frame, orient=HORIZONTAL).pack(fill=X)
         
-        # --- 左侧操作按钮组 ---
-        left_buttons_frame = ttk.Frame(top_frame)
-        left_buttons_frame.pack(side=LEFT)
+        # --- 主内容区域 ---
+        content_frame = ttk.Frame(main_container, padding=(30, 20, 30, 20))
+        content_frame.pack(fill=BOTH, expand=True)
         
-        # 操作标签
-        action_label = ttk.Label(left_buttons_frame, text="操作", 
-                               font=("Microsoft YaHei UI", 11, "bold"))
-        action_label.pack(side=LEFT, padx=(0, 15))
+        # --- 左侧导航栏 ---
+        sidebar_container = ttk.Frame(content_frame)
+        sidebar_container.pack(side=LEFT, fill=Y, padx=(0, 25))
         
-        self.action_buttons = []
-        btn_configs = [
-            {"text": "📥 导入数据", "cmd": self.import_data, "style": "info-outline", "width": 14},
-            {"text": "➕ 新增", "cmd": self.open_add_window, "style": "success-outline", "width": 10},
-            {"text": "✏️ 编辑", "cmd": self.open_edit_window, "style": "warning-outline", "width": 10},
-            {"text": "🗑️ 删除", "cmd": self.delete_products, "style": "danger-outline", "width": 10}
-        ]
+        self.sidebar = ttk.Frame(sidebar_container, width=220)
+        self.sidebar.pack(fill=BOTH, expand=True)
+        self.sidebar.pack_propagate(False)  # 固定宽度
         
-        for i, config in enumerate(btn_configs):
-            btn = ttk.Button(left_buttons_frame, text=config["text"], command=config["cmd"], 
-                           bootstyle=config["style"], width=config["width"])
-            btn.pack(side=LEFT, padx=(0, 8) if i < len(btn_configs)-1 else (0, 0))
-            self.action_buttons.append(btn)
-            
-            # 添加按钮悬停效果
-            self.add_button_hover_effect(btn)
-
-        # --- 中间设置区域 ---
-        middle_frame = ttk.Frame(top_frame)
-        middle_frame.pack(side=LEFT, padx=(30, 30))
+        self._build_sidebar()
         
-        # 分隔线
-        ttk.Separator(middle_frame, orient=VERTICAL).pack(side=LEFT, fill=Y, padx=(0, 20))
+        # --- 右侧内容区域 ---
+        content_container = ttk.Frame(content_frame)
+        content_container.pack(side=RIGHT, fill=BOTH, expand=True)
         
-        settings_label = ttk.Label(middle_frame, text="设置", 
-                                 font=("Microsoft YaHei UI", 11, "bold"))
-        settings_label.pack(side=LEFT, padx=(0, 15))
+        self.content_area = ttk.Frame(content_container, padding=(25, 20, 25, 20))
+        self.content_area.pack(fill=BOTH, expand=True)
         
-        self.generate_report_var = tk.BooleanVar()
-        self.report_checkbutton = ttk.Checkbutton(middle_frame, text="📊 生成调试报告", 
-                                                variable=self.generate_report_var, 
-                                                bootstyle="round-toggle")
-        self.report_checkbutton.pack(side=LEFT)
-        self.action_buttons.append(self.report_checkbutton)
-
-        # --- 右侧搜索区域 ---
-        search_frame = ttk.Frame(top_frame)
-        search_frame.pack(side=RIGHT, fill=X, expand=True)
+        # 创建各个页面
+        self._create_pages()
         
-        # 搜索容器
-        search_container = ttk.Frame(search_frame)
-        search_container.pack(side=RIGHT)
+        # 显示默认页面
+        self.show_page("overview")
         
-        search_label = ttk.Label(search_container, text="🔍 搜索", 
-                               font=("Microsoft YaHei UI", 11, "bold"))
-        search_label.pack(side=LEFT, padx=(0, 15))
+        # --- 状态栏 ---
+        self._build_status_bar(main_container)
         
-        # 搜索输入框容器
-        entry_container = ttk.Frame(search_container)
-        entry_container.pack(side=LEFT, padx=(0, 8))
+        # 启动时间更新
+        self.update_time()
         
-        self.search_entry = ttk.Entry(entry_container, font=("Microsoft YaHei UI", 11), 
-                                    width=28, style="Search.TEntry")
-        self.search_entry.pack(side=LEFT)
-        self.search_entry.bind("<Return>", self.search_products)
-        self.search_entry.bind("<FocusIn>", self.on_search_focus_in)
-        self.search_entry.bind("<FocusOut>", self.on_search_focus_out)
-        self.action_buttons.append(self.search_entry)
+        # 滚动优化设置
+        self._scroll_timer = None
+        self._last_scroll_time = 0
+        self._smooth_scroll_active = False
         
-        # 搜索按钮组
-        button_container = ttk.Frame(search_container)
-        button_container.pack(side=LEFT)
-        
-        self.search_button = ttk.Button(button_container, text="搜索", command=self.search_products, 
-                                      bootstyle="primary", width=8)
-        self.search_button.pack(side=LEFT, padx=(0, 4))
-        
-        self.clear_search_button = ttk.Button(button_container, text="清除", command=self.clear_search, 
-                                            bootstyle="secondary-outline", width=6)
-        self.clear_search_button.pack(side=LEFT)
-        self.action_buttons.extend([self.search_button, self.clear_search_button])
-        
-        # 设置搜索框占位符
-        self.setup_search_placeholder()
-
-
-
-        # --- 数据表格区域 ---
-        table_container = ttk.Frame(main_container, padding=(30, 5, 30, 20))
-        table_container.pack(expand=True, fill=BOTH)
-        
-        # 表格标题栏
-        table_header = ttk.Frame(table_container)
-        table_header.pack(fill=X, pady=(0, 15))
-        
-        # 左侧标题
-        title_frame = ttk.Frame(table_header)
-        title_frame.pack(side=LEFT)
-        
-        table_title = ttk.Label(title_frame, text="📋 数据列表", 
-                               font=("Microsoft YaHei UI", 13, "bold"))
-        table_title.pack(side=LEFT)
-        
-        # 数据统计标签
-        self.data_stats_label = ttk.Label(title_frame, text="", 
-                                        font=("Microsoft YaHei UI", 10),
-                                        foreground="#888")
-        self.data_stats_label.pack(side=LEFT, padx=(15, 0))
-        
-        # 右侧工具
-        tools_frame = ttk.Frame(table_header)
-        tools_frame.pack(side=RIGHT)
-        
-        # 刷新按钮
-        refresh_btn = ttk.Button(tools_frame, text="🔄 刷新", command=self.refresh_data,
-                               bootstyle="secondary-outline", width=8)
-        refresh_btn.pack(side=RIGHT, padx=(8, 0))
-        self.action_buttons.append(refresh_btn)
-        
-        # 导出按钮
-        export_btn = ttk.Button(tools_frame, text="📤 导出", command=self.export_data,
-                              bootstyle="info-outline", width=8)
-        export_btn.pack(side=RIGHT)
-        self.action_buttons.append(export_btn)
-
-        # 表格框架
-        tree_frame = ttk.Frame(table_container)
-        tree_frame.pack(expand=True, fill=BOTH)
-
-        # 样式配置
+        # 配置自定义样式
+        self._configure_custom_styles()
+    
+    def _configure_custom_styles(self):
+        """配置自定义样式"""
         style = ttk.Style()
         
-        # 表格样式 - 优化滚动性能
-        style.configure('Custom.Treeview', 
-                       rowheight=42,
+        # 表格样式增强
+        style.configure('Enhanced.Treeview', 
+                       rowheight=45,
                        font=("Microsoft YaHei UI", 11),
-                       fieldbackground="#2b2b2b",
                        borderwidth=0,
-                       relief="flat",
-                       # 优化滚动性能
-                       selectmode="extended")
+                       relief="flat")
         
-        # 表头样式
-        style.configure('Custom.Treeview.Heading', 
+        style.configure('Enhanced.Treeview.Heading', 
                        font=("Microsoft YaHei UI", 11, "bold"),
                        padding=(15, 12),
                        relief="flat",
                        borderwidth=1)
         
         # 选中行样式
-        style.map('Custom.Treeview',
-                 background=[('selected', '#404040')],
-                 foreground=[('selected', '#ffffff')])
-        
-        # 骨架加载样式
-        style.configure("Skeleton.Treeview", 
-                       foreground="#555",
-                       font=("Microsoft YaHei UI", 11),
-                       rowheight=42)
+        style.map('Enhanced.Treeview',
+                 background=[('selected', '#4A90E2')],
+                 foreground=[('selected', '#FFFFFF')])
         
         # 搜索框样式
         style.configure("Search.TEntry",
-                       fieldbackground="#3a3a3a",
+                       fieldbackground="#3A3A3A",
                        borderwidth=1,
                        relief="solid",
-                       padding=(8, 6))
-
-        self.tree = ttk.Treeview(tree_frame, columns=DISPLAY_COLUMNS, show="headings", 
-                               style="Custom.Treeview", height=20)  # 限制可见行数提高性能
+                       padding=(10, 8))
+    
+    def _build_status_bar(self, parent):
+        """构建状态栏"""
+        status_frame = ttk.Frame(parent, padding=(25, 10, 25, 15))
+        status_frame.pack(side=BOTTOM, fill=X)
         
-        # 配置列 - 所有数据居中显示，确保总宽度足够触发横向滚动
-        column_configs = {
-            'shop': {'width': 120, 'anchor': CENTER},          # 店铺名
-            'product_id': {'width': 130, 'anchor': CENTER},    # 货品ID
-            'spec_id': {'width': 130, 'anchor': CENTER},       # 规格ID
-            'sku': {'width': 160, 'anchor': CENTER},           # SKU编码
-            'price': {'width': 100, 'anchor': CENTER},         # 价格
-            'quantity': {'width': 100, 'anchor': CENTER},      # 库存数量
-            'spec_name': {'width': 220, 'anchor': CENTER},     # 规格名称
-            'name': {'width': 400, 'anchor': CENTER}           # 商品名称
-        }
+        # 分隔线
+        ttk.Separator(status_frame, orient=HORIZONTAL).pack(fill=X, pady=(0, 10))
         
-        # 列图标映射
-        column_icons = {
-            'shop': '🏪',
-            'product_id': '🆔',
-            'spec_id': '🔖',
-            'sku': '📦',
-            'price': '💰',
-            'quantity': '📊',
-            'spec_name': '📝',
-            'name': '🏷️'
-        }
+        status_container = ttk.Frame(status_frame)
+        status_container.pack(fill=X)
         
-        for col in DISPLAY_COLUMNS:
-            header_text = HEADER_MAP.get(col, col)
-            icon = column_icons.get(col, '')
-            full_header = f"{icon} {header_text}" if icon else header_text
-            
-            # 所有表头居中对齐
-            self.tree.heading(col, text=full_header, anchor=CENTER)
-            
-            config = column_configs.get(col, {'width': 100, 'anchor': CENTER})
-            # 设置最小宽度，确保内容可见
-            min_width = max(60, config['width'] // 2)
-            self.tree.column(col, **config, minwidth=min_width)
-            
-            # 添加列排序功能
-            self.tree.heading(col, command=lambda c=col: self.sort_column(c))
-
-        # 滚动条
-        v_scrollbar = ttk.Scrollbar(tree_frame, orient=VERTICAL, command=self.tree.yview)
-        h_scrollbar = ttk.Scrollbar(tree_frame, orient=HORIZONTAL, command=self.tree.xview)
+        # 左侧状态
+        left_status = ttk.Frame(status_container)
+        left_status.pack(side=LEFT, fill=X, expand=True)
         
-        # 保存滚动条引用
-        self.v_scrollbar = v_scrollbar
-        self.h_scrollbar = h_scrollbar
+        self.status_icon = ttk.Label(left_status, text="✅", font=("Microsoft YaHei UI", 11))
+        self.status_icon.pack(side=LEFT, padx=(0, 8))
         
-        # 配置滚动条
-        self.tree.configure(yscrollcommand=self._on_y_scroll, xscrollcommand=h_scrollbar.set)
+        self.status_label = ttk.Label(left_status, text="准备就绪", 
+                                    font=("Microsoft YaHei UI", 10))
+        self.status_label.pack(side=LEFT)
         
-        # 布局 - 确保滚动条正确显示
-        self.tree.grid(row=0, column=0, sticky="nsew")
-        v_scrollbar.grid(row=0, column=1, sticky="ns")
-        h_scrollbar.grid(row=1, column=0, sticky="ew")
+        # 中间进度条（隐藏状态）
+        self.progress_var = tk.DoubleVar()
+        self.progress_bar = ttk.Progressbar(status_container, variable=self.progress_var,
+                                          mode='indeterminate', length=200)
         
-        # 配置网格权重
-        tree_frame.grid_rowconfigure(0, weight=1)
-        tree_frame.grid_columnconfigure(0, weight=1)
+        # 右侧状态信息
+        right_status = ttk.Frame(status_container)
+        right_status.pack(side=RIGHT)
         
-        # 确保滚动条样式
-        style.configure("Vertical.TScrollbar", width=16)
-        style.configure("Horizontal.TScrollbar", height=16)
-
-        # 事件绑定
-        self.tree.bind("<Control-c>", self.copy_to_clipboard)
-        self.tree.bind("<Button-1>", self.on_cell_click)
-        self.tree.bind("<Double-Button-1>", self.on_row_double_click)
-        self.tree.bind("<Motion>", self.on_tree_motion)
+        self.info_label = ttk.Label(right_status, text="", 
+                                   font=("Microsoft YaHei UI", 10),
+                                   foreground="#888")
+        self.info_label.pack(side=RIGHT, padx=(0, 15))
         
-        # 鼠标滚轮支持 - 优化滚动体验
-        self.tree.bind("<MouseWheel>", self._on_mouse_wheel)
-        self.tree.bind("<Shift-MouseWheel>", self._on_horizontal_scroll)
-        
-        # 键盘滚动支持
-        self.tree.bind("<Up>", self._on_key_scroll)
-        self.tree.bind("<Down>", self._on_key_scroll)
-        self.tree.bind("<Page_Up>", self._on_key_scroll)
-        self.tree.bind("<Page_Down>", self._on_key_scroll)
-        self.tree.bind("<Home>", self._on_key_scroll)
-        self.tree.bind("<End>", self._on_key_scroll)
-
-        # --- 状态栏 ---
-        status_frame = ttk.Frame(main_container, padding=(30, 15, 30, 20))
+        # 时间标签
+        self.time_label = ttk.Label(right_status, text="", 
+                                  font=("Microsoft YaHei UI", 9),
+                                  foreground="#666")
+        self.time_label.pack(side=RIGHT)
         status_frame.pack(side=BOTTOM, fill=X)
         
         # 分隔线
@@ -479,14 +370,137 @@ class App(ttk.Window):
                                   font=("Microsoft YaHei UI", 9),
                                   foreground="#666")
         self.time_label.pack(side=RIGHT)
+    
+    def _build_sidebar(self):
+        """构建左侧导航栏"""
+        # 导航标题区域
+        nav_header = ttk.Frame(self.sidebar, padding=(20, 15, 20, 10))
+        nav_header.pack(fill=X)
         
-        # 启动时间更新
-        self.update_time()
+        nav_title = ttk.Label(nav_header, text="导航", 
+                             font=("Microsoft YaHei UI", 14, "bold"))
+        nav_title.pack(anchor=tk.W)
         
-        # 滚动优化设置
-        self._scroll_timer = None
-        self._last_scroll_time = 0
-        self._smooth_scroll_active = False
+        nav_subtitle = ttk.Label(nav_header, text="Navigation", 
+                               font=("Microsoft YaHei UI", 9),
+                               foreground="#888")
+        nav_subtitle.pack(anchor=tk.W, pady=(2, 0))
+        
+        # 导航按钮区域
+        nav_content = ttk.Frame(self.sidebar, padding=(15, 10, 15, 15))
+        nav_content.pack(fill=X)
+        
+        # 导航按钮配置
+        nav_buttons = [
+            {"text": "📊  总览", "page": "overview", "desc": "数据概览与统计"},
+            {"text": "📦  SKU列表", "page": "sku_list", "desc": "商品管理与编辑"},
+            {"text": "🎫  优惠券", "page": "coupons", "desc": "优惠券配置管理"}
+        ]
+        
+        self.nav_buttons = {}
+        
+        for i, btn_config in enumerate(nav_buttons):
+            # 按钮容器
+            btn_container = ttk.Frame(nav_content)
+            btn_container.pack(fill=X, pady=(0, 12))
+            
+            # 主按钮 - 更现代的样式
+            btn = ttk.Button(btn_container, 
+                           text=btn_config["text"],
+                           command=lambda p=btn_config["page"]: self.show_page(p),
+                           bootstyle="outline-secondary",
+                           width=28)
+            btn.pack(fill=X)
+            
+            # 描述文字
+            desc_label = ttk.Label(btn_container, 
+                                 text=btn_config["desc"],
+                                 font=("Microsoft YaHei UI", 8),
+                                 foreground="#999")
+            desc_label.pack(pady=(4, 0), padx=(5, 0), anchor=tk.W)
+            
+            self.nav_buttons[btn_config["page"]] = btn
+            
+            # 添加悬停效果
+            self.add_nav_hover_effect(btn)
+        
+        # 优雅的分隔区域
+        separator_area = ttk.Frame(self.sidebar, padding=(20, 15, 20, 15))
+        separator_area.pack(fill=X)
+        ttk.Separator(separator_area, orient=HORIZONTAL).pack(fill=X)
+        
+        # 快捷操作区域
+        quick_area = ttk.Frame(self.sidebar, padding=(15, 10, 15, 20))
+        quick_area.pack(fill=X)
+        
+        quick_title = ttk.Label(quick_area, text="快捷操作", 
+                               font=("Microsoft YaHei UI", 12, "bold"))
+        quick_title.pack(anchor=tk.W, pady=(0, 10))
+        
+        quick_buttons = [
+            {"text": "📥  导入数据", "cmd": self.import_data, "style": "info-outline"},
+            {"text": "📤  导出数据", "cmd": self.export_data, "style": "secondary-outline"},
+            {"text": "🔄  刷新数据", "cmd": self.refresh_data, "style": "primary-outline"}
+        ]
+        
+        for btn_config in quick_buttons:
+            btn = ttk.Button(quick_area,
+                           text=btn_config["text"],
+                           command=btn_config["cmd"],
+                           bootstyle=btn_config["style"],
+                           width=28)
+            btn.pack(fill=X, pady=(0, 8))
+            self.add_button_hover_effect(btn)
+    
+    def add_nav_hover_effect(self, button):
+        """添加导航按钮悬停效果"""
+        def on_enter(e):
+            button.configure(cursor="hand2")
+        def on_leave(e):
+            button.configure(cursor="")
+        button.bind("<Enter>", on_enter)
+        button.bind("<Leave>", on_leave)
+    
+    def _create_pages(self):
+        """创建各个页面"""
+        self.pages = {}
+        
+        # 总览页面
+        self.pages["overview"] = self._create_overview_page()
+        
+        # SKU列表页面
+        self.pages["sku_list"] = self._create_sku_list_page()
+        
+        # 优惠券页面
+        self.pages["coupons"] = self._create_coupons_page()
+    
+    def show_page(self, page_name):
+        """显示指定页面"""
+        # 隐藏所有页面
+        for page in self.pages.values():
+            page.pack_forget()
+        
+        # 显示指定页面
+        if page_name in self.pages:
+            self.pages[page_name].pack(fill=BOTH, expand=True)
+            self.current_page = page_name
+            
+            # 更新导航按钮样式
+            for btn_page, btn in self.nav_buttons.items():
+                if btn_page == page_name:
+                    btn.configure(bootstyle="primary")
+                else:
+                    btn.configure(bootstyle="outline-secondary")
+            
+            # 页面特定的初始化
+            if page_name == "overview":
+                self._refresh_overview()
+            elif page_name == "sku_list":
+                # 确保tree已经创建后再加载数据
+                if hasattr(self, 'tree') and self.tree:
+                    self.start_new_load(force=True)
+            elif page_name == "coupons":
+                self._refresh_coupons()
 
     def copy_to_clipboard(self, event=None):
         selected_items = self.tree.selection()
@@ -630,9 +644,705 @@ class App(ttk.Window):
         """刷新数据"""
         self.start_new_load(force=True)
     
+    def _create_product_table(self, parent):
+        """创建商品表格"""
+        # 表格框架
+        tree_frame = ttk.Frame(parent)
+        tree_frame.pack(fill=BOTH, expand=True)
+
+        # 样式配置
+        style = ttk.Style()
+        
+        # 表格样式 - 优化滚动性能
+        style.configure('Custom.Treeview', 
+                       rowheight=42,
+                       font=("Microsoft YaHei UI", 11),
+                       fieldbackground="#2b2b2b",
+                       borderwidth=0,
+                       relief="flat",
+                       selectmode="extended")
+        
+        # 表头样式
+        style.configure('Custom.Treeview.Heading', 
+                       font=("Microsoft YaHei UI", 11, "bold"),
+                       padding=(15, 12),
+                       relief="flat",
+                       borderwidth=1)
+        
+        # 选中行样式
+        style.map('Custom.Treeview',
+                 background=[('selected', '#404040')],
+                 foreground=[('selected', '#ffffff')])
+        
+        # 骨架加载样式
+        style.configure("Skeleton.Treeview", 
+                       foreground="#555",
+                       font=("Microsoft YaHei UI", 11),
+                       rowheight=42)
+        
+        # 滚动条样式
+        style.configure("Vertical.TScrollbar", width=16)
+        style.configure("Horizontal.TScrollbar", height=16)
+
+        self.tree = ttk.Treeview(tree_frame, columns=DISPLAY_COLUMNS, show="headings", 
+                               style="Enhanced.Treeview", height=18)
+        
+        # 配置列
+        column_configs = {
+            'shop': {'width': 120, 'anchor': CENTER},
+            'product_id': {'width': 130, 'anchor': CENTER},
+            'spec_id': {'width': 130, 'anchor': CENTER},
+            'sku': {'width': 160, 'anchor': CENTER},
+            'price': {'width': 100, 'anchor': CENTER},
+            'final_price': {'width': 100, 'anchor': CENTER},
+            'quantity': {'width': 100, 'anchor': CENTER},
+            'spec_name': {'width': 220, 'anchor': CENTER},
+            'name': {'width': 400, 'anchor': CENTER}
+        }
+        
+        # 列图标映射
+        column_icons = {
+            'shop': '🏪',
+            'product_id': '🆔',
+            'spec_id': '🔖',
+            'sku': '📦',
+            'price': '💰',
+            'final_price': '🎯',
+            'quantity': '📊',
+            'spec_name': '📝',
+            'name': '🏷️'
+        }
+        
+        for col in DISPLAY_COLUMNS:
+            header_text = HEADER_MAP.get(col, col)
+            icon = column_icons.get(col, '')
+            full_header = f"{icon} {header_text}" if icon else header_text
+            
+            self.tree.heading(col, text=full_header, anchor=CENTER)
+            config = column_configs.get(col, {'width': 100, 'anchor': CENTER})
+            min_width = max(60, config['width'] // 2)
+            self.tree.column(col, **config, minwidth=min_width)
+            
+            self.tree.heading(col, command=lambda c=col: self.sort_column(c))
+
+        # 滚动条
+        v_scrollbar = ttk.Scrollbar(tree_frame, orient=VERTICAL, command=self.tree.yview)
+        h_scrollbar = ttk.Scrollbar(tree_frame, orient=HORIZONTAL, command=self.tree.xview)
+        
+        self.v_scrollbar = v_scrollbar
+        self.h_scrollbar = h_scrollbar
+        
+        self.tree.configure(yscrollcommand=self._on_y_scroll, xscrollcommand=h_scrollbar.set)
+        
+        # 布局
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        v_scrollbar.grid(row=0, column=1, sticky="ns")
+        h_scrollbar.grid(row=1, column=0, sticky="ew")
+        
+        tree_frame.grid_rowconfigure(0, weight=1)
+        tree_frame.grid_columnconfigure(0, weight=1)
+
+        # 事件绑定
+        self.tree.bind("<Control-c>", self.copy_to_clipboard)
+        self.tree.bind("<Button-1>", self.on_cell_click)
+        self.tree.bind("<Double-Button-1>", self.on_row_double_click)
+        self.tree.bind("<Motion>", self.on_tree_motion)
+        self.tree.bind("<MouseWheel>", self._on_mouse_wheel)
+        self.tree.bind("<Shift-MouseWheel>", self._on_horizontal_scroll)
+        self.tree.bind("<Up>", self._on_key_scroll)
+        self.tree.bind("<Down>", self._on_key_scroll)
+        self.tree.bind("<Page_Up>", self._on_key_scroll)
+        self.tree.bind("<Page_Down>", self._on_key_scroll)
+        self.tree.bind("<Home>", self._on_key_scroll)
+        self.tree.bind("<End>", self._on_key_scroll)
+    
+    def _create_coupon_table(self, parent):
+        """创建优惠券表格"""
+        # 表格框架
+        tree_frame = ttk.Frame(parent)
+        tree_frame.pack(fill=BOTH, expand=True)
+        
+        columns = ['id', 'shop', 'coupon_type', 'amount', 'min_price', 
+                  'start_date', 'end_date', 'description', 'is_active']
+        
+        self.coupon_tree = ttk.Treeview(tree_frame, columns=columns, show="headings", 
+                                       style="Enhanced.Treeview", height=15)
+        
+        # 配置列
+        column_configs = {
+            'id': {'width': 60, 'anchor': CENTER},
+            'shop': {'width': 120, 'anchor': CENTER},
+            'coupon_type': {'width': 100, 'anchor': CENTER},
+            'amount': {'width': 100, 'anchor': CENTER},
+            'min_price': {'width': 100, 'anchor': CENTER},
+            'start_date': {'width': 120, 'anchor': CENTER},
+            'end_date': {'width': 120, 'anchor': CENTER},
+            'description': {'width': 200, 'anchor': tk.W},
+            'is_active': {'width': 80, 'anchor': CENTER}
+        }
+        
+        for col in columns:
+            header_text = COUPON_HEADER_MAP.get(col, col)
+            self.coupon_tree.heading(col, text=header_text, anchor=CENTER)
+            config = column_configs.get(col, {'width': 100, 'anchor': CENTER})
+            self.coupon_tree.column(col, **config, minwidth=50)
+        
+        # 滚动条
+        v_scrollbar2 = ttk.Scrollbar(tree_frame, orient=VERTICAL, command=self.coupon_tree.yview)
+        h_scrollbar2 = ttk.Scrollbar(tree_frame, orient=HORIZONTAL, command=self.coupon_tree.xview)
+        
+        self.coupon_tree.configure(yscrollcommand=v_scrollbar2.set, xscrollcommand=h_scrollbar2.set)
+        
+        # 布局
+        self.coupon_tree.grid(row=0, column=0, sticky="nsew")
+        v_scrollbar2.grid(row=0, column=1, sticky="ns")
+        h_scrollbar2.grid(row=1, column=0, sticky="ew")
+        
+        tree_frame.grid_rowconfigure(0, weight=1)
+        tree_frame.grid_columnconfigure(0, weight=1)
+        
+        # 双击编辑
+        self.coupon_tree.bind("<Double-Button-1>", lambda e: self._edit_coupon())
+    
+    def _refresh_overview(self):
+        """刷新总览页面数据"""
+        try:
+            # 获取统计数据
+            total_products = database.get_all_products_count()
+            
+            # 获取店铺数量
+            conn = database.get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('SELECT COUNT(DISTINCT shop) FROM products WHERE shop IS NOT NULL AND shop != ""')
+            total_shops = cursor.fetchone()[0]
+            
+            # 获取优惠券数量
+            cursor.execute('SELECT COUNT(*) FROM coupons WHERE is_active = 1')
+            total_coupons = cursor.fetchone()[0]
+            
+            # 获取平均价格
+            cursor.execute('SELECT AVG(price) FROM products WHERE price > 0')
+            avg_price_result = cursor.fetchone()[0]
+            avg_price = round(avg_price_result, 2) if avg_price_result else 0
+            
+            conn.close()
+            
+            # 更新统计卡片
+            self.stats_cards["total_products"].value_label.config(text=str(total_products))
+            self.stats_cards["total_shops"].value_label.config(text=str(total_shops))
+            self.stats_cards["total_coupons"].value_label.config(text=str(total_coupons))
+            self.stats_cards["avg_price"].value_label.config(text=f"¥{avg_price}")
+            
+        except Exception as e:
+            print(f"刷新总览数据时出错: {e}")
+    
+    def _refresh_coupons(self):
+        """刷新优惠券页面数据"""
+        # 清空现有数据
+        for item in self.coupon_tree.get_children():
+            self.coupon_tree.delete(item)
+        
+        # 加载数据
+        coupons = database.get_all_coupons()
+        for coupon in coupons:
+            coupon_dict = dict(zip(database.COUPON_COLUMNS, coupon))
+            
+            # 格式化显示数据
+            display_data = []
+            for col in ['id', 'shop', 'coupon_type', 'amount', 'min_price', 
+                       'start_date', 'end_date', 'description', 'is_active']:
+                value = coupon_dict[col]
+                
+                if col == 'coupon_type':
+                    value = '固定金额' if value == 'fixed' else '百分比'
+                elif col == 'amount':
+                    coupon_type = coupon_dict['coupon_type']
+                    if coupon_type == 'fixed':
+                        value = f"¥{value}"
+                    else:
+                        value = f"{value}%"
+                elif col == 'is_active':
+                    value = '启用' if value else '禁用'
+                
+                display_data.append(str(value))
+            
+            self.coupon_tree.insert("", tk.END, values=display_data)
+    
+    def _add_coupon(self):
+        """添加优惠券"""
+        CouponEditorWindow(self)
+    
+    def _edit_coupon(self):
+        """编辑优惠券"""
+        selected = self.coupon_tree.selection()
+        if not selected:
+            messagebox.showwarning("警告", "请选择要编辑的优惠券", parent=self)
+            return
+        
+        item = selected[0]
+        values = self.coupon_tree.item(item, 'values')
+        coupon_id = values[0]
+        
+        coupon = database.get_coupon_by_id(coupon_id)
+        if coupon:
+            coupon_dict = dict(zip(database.COUPON_COLUMNS, coupon))
+            CouponEditorWindow(self, coupon_dict)
+    
+    def _delete_coupon(self):
+        """删除优惠券"""
+        selected = self.coupon_tree.selection()
+        if not selected:
+            messagebox.showwarning("警告", "请选择要删除的优惠券", parent=self)
+            return
+        
+        if messagebox.askyesno("确认删除", "确定要删除选中的优惠券吗？", parent=self):
+            for item in selected:
+                values = self.coupon_tree.item(item, 'values')
+                coupon_id = values[0]
+                database.delete_coupon(coupon_id)
+            
+            self._refresh_coupons()
+            # 刷新SKU列表的到手价
+            if hasattr(self, 'tree'):
+                self.start_new_load(force=True)
+            messagebox.showinfo("成功", "优惠券删除成功", parent=self)
+    
     def export_data(self):
         """导出数据功能"""
         messagebox.showinfo("提示", "导出功能开发中...", parent=self)
+    
+    def _create_overview_page(self):
+        """创建总览页面"""
+        page = ttk.Frame(self.content_area)
+        
+        # 页面标题区域
+        header_area = ttk.Frame(page, padding=(0, 0, 0, 25))
+        header_area.pack(fill=X)
+        
+        title_container = ttk.Frame(header_area)
+        title_container.pack(fill=X)
+        
+        # 主标题
+        main_title = ttk.Label(title_container, text="数据总览", 
+                             font=("Microsoft YaHei UI", 20, "bold"))
+        main_title.pack(side=LEFT)
+        
+        # 副标题
+        sub_title = ttk.Label(title_container, text="Dashboard Overview", 
+                            font=("Microsoft YaHei UI", 11),
+                            foreground="#888")
+        sub_title.pack(side=LEFT, padx=(15, 0), pady=(5, 0))
+        
+        # 刷新按钮
+        refresh_btn = ttk.Button(title_container, text="🔄 刷新", 
+                               command=self._refresh_overview,
+                               bootstyle="outline-primary", width=10)
+        refresh_btn.pack(side=RIGHT)
+        
+        # 统计卡片区域
+        stats_container = ttk.Frame(page, padding=(0, 0, 0, 30))
+        stats_container.pack(fill=X)
+        
+        # 创建统计卡片
+        self.stats_cards = {}
+        
+        card_configs = [
+            {"title": "商品总数", "key": "total_products", "icon": "📦", "color": "#4A90E2", "desc": "Total Products"},
+            {"title": "店铺数量", "key": "total_shops", "icon": "🏪", "color": "#7ED321", "desc": "Active Shops"},
+            {"title": "优惠券数", "key": "total_coupons", "icon": "🎫", "color": "#F5A623", "desc": "Active Coupons"},
+            {"title": "平均价格", "key": "avg_price", "icon": "💰", "color": "#BD10E0", "desc": "Average Price"}
+        ]
+        
+        for i, config in enumerate(card_configs):
+            card = self._create_modern_stat_card(stats_container, config)
+            card.grid(row=0, column=i, padx=(0, 20) if i < 3 else (0, 0), sticky="ew")
+            self.stats_cards[config["key"]] = card
+        
+        # 配置网格权重
+        for i in range(4):
+            stats_container.grid_columnconfigure(i, weight=1)
+        
+        # 内容区域
+        content_area = ttk.Frame(page)
+        content_area.pack(fill=BOTH, expand=True)
+        
+        # 左侧图表区域
+        chart_container = ttk.Frame(content_area)
+        chart_container.pack(side=LEFT, fill=BOTH, expand=True, padx=(0, 15))
+        
+        chart_frame = ttk.LabelFrame(chart_container, text="📈 数据趋势分析", 
+                                   padding=(25, 20))
+        chart_frame.pack(fill=BOTH, expand=True)
+        
+        # 图表占位内容
+        chart_content = ttk.Frame(chart_frame)
+        chart_content.pack(fill=BOTH, expand=True)
+        
+        chart_title = ttk.Label(chart_content, text="数据可视化", 
+                              font=("Microsoft YaHei UI", 14, "bold"))
+        chart_title.pack(pady=(20, 10))
+        
+        chart_desc = ttk.Label(chart_content, 
+                             text="📊 商品价格分布图\n📈 店铺销量对比\n🎯 优惠券使用统计\n📉 库存变化趋势",
+                             font=("Microsoft YaHei UI", 11),
+                             foreground="#666",
+                             justify=LEFT)
+        chart_desc.pack(pady=(10, 20))
+        
+        # 右侧快速信息
+        info_container = ttk.Frame(content_area)
+        info_container.pack(side=RIGHT, fill=Y)
+        
+        # 快速操作卡片
+        quick_frame = ttk.LabelFrame(info_container, text="⚡ 快速操作", 
+                                   padding=(20, 15), width=280)
+        quick_frame.pack(fill=X, pady=(0, 15))
+        quick_frame.pack_propagate(False)
+        
+        quick_actions = [
+            {"text": "📥 导入商品数据", "cmd": self.import_data, "style": "info"},
+            {"text": "🎫 管理优惠券", "cmd": lambda: self.show_page("coupons"), "style": "warning"},
+            {"text": "📦 查看商品列表", "cmd": lambda: self.show_page("sku_list"), "style": "primary"}
+        ]
+        
+        for action in quick_actions:
+            btn = ttk.Button(quick_frame, text=action["text"], 
+                           command=action["cmd"], bootstyle=action["style"],
+                           width=30)
+            btn.pack(fill=X, pady=(0, 8))
+        
+        # 系统信息卡片
+        system_frame = ttk.LabelFrame(info_container, text="ℹ️ 系统信息", 
+                                    padding=(20, 15), width=280)
+        system_frame.pack(fill=X)
+        system_frame.pack_propagate(False)
+        
+        # 系统状态信息
+        status_items = [
+            ("数据库状态", "✅ 正常"),
+            ("最后更新", "刚刚"),
+            ("系统版本", "v2.0"),
+            ("运行时间", "正在计算...")
+        ]
+        
+        for label, value in status_items:
+            item_frame = ttk.Frame(system_frame)
+            item_frame.pack(fill=X, pady=(0, 5))
+            
+            ttk.Label(item_frame, text=label, 
+                     font=("Microsoft YaHei UI", 9),
+                     foreground="#666").pack(side=LEFT)
+            ttk.Label(item_frame, text=value, 
+                     font=("Microsoft YaHei UI", 9, "bold")).pack(side=RIGHT)
+        
+        return page
+    
+    def _create_modern_stat_card(self, parent, config):
+        """创建现代化统计卡片"""
+        # 卡片容器
+        card_container = ttk.Frame(parent)
+        
+        # 卡片主体
+        card = ttk.Frame(card_container, padding=(20, 18))
+        card.pack(fill=BOTH, expand=True)
+        
+        # 顶部区域 - 图标和数值
+        top_area = ttk.Frame(card)
+        top_area.pack(fill=X, pady=(0, 12))
+        
+        # 图标
+        icon_label = ttk.Label(top_area, text=config["icon"], 
+                              font=("Microsoft YaHei UI", 24))
+        icon_label.pack(side=LEFT)
+        
+        # 数值
+        value_label = ttk.Label(top_area, text="0", 
+                               font=("Microsoft YaHei UI", 28, "bold"),
+                               foreground=config["color"])
+        value_label.pack(side=RIGHT)
+        
+        # 中间区域 - 标题
+        title_label = ttk.Label(card, text=config["title"],
+                               font=("Microsoft YaHei UI", 12, "bold"))
+        title_label.pack(anchor=tk.W, pady=(0, 4))
+        
+        # 底部区域 - 描述
+        desc_label = ttk.Label(card, text=config["desc"],
+                              font=("Microsoft YaHei UI", 9),
+                              foreground="#888")
+        desc_label.pack(anchor=tk.W)
+        
+        # 添加悬停效果
+        self.add_card_hover_effect(card)
+        
+        # 保存引用以便更新
+        card_container.value_label = value_label
+        
+        return card_container
+    
+    def add_card_hover_effect(self, card):
+        """添加卡片悬停效果"""
+        def on_enter(e):
+            card.configure(cursor="hand2")
+        def on_leave(e):
+            card.configure(cursor="")
+        card.bind("<Enter>", on_enter)
+        card.bind("<Leave>", on_leave)
+    
+    def _create_sku_list_page(self):
+        """创建SKU列表页面"""
+        page = ttk.Frame(self.content_area)
+        
+        # 页面标题区域
+        header_area = ttk.Frame(page, padding=(0, 0, 0, 25))
+        header_area.pack(fill=X)
+        
+        # 标题容器
+        title_container = ttk.Frame(header_area)
+        title_container.pack(fill=X)
+        
+        # 主标题
+        main_title = ttk.Label(title_container, text="商品管理", 
+                             font=("Microsoft YaHei UI", 20, "bold"))
+        main_title.pack(side=LEFT)
+        
+        # 副标题
+        sub_title = ttk.Label(title_container, text="Product Management", 
+                            font=("Microsoft YaHei UI", 11),
+                            foreground="#888")
+        sub_title.pack(side=LEFT, padx=(15, 0), pady=(5, 0))
+        
+        # 操作按钮组
+        action_container = ttk.Frame(title_container)
+        action_container.pack(side=RIGHT)
+        
+        action_buttons = [
+            {"text": "➕ 新增", "cmd": self.open_add_window, "style": "success", "width": 10},
+            {"text": "✏️ 编辑", "cmd": self.open_edit_window, "style": "warning", "width": 10},
+            {"text": "🗑️ 删除", "cmd": self.delete_products, "style": "danger", "width": 10}
+        ]
+        
+        for i, btn_config in enumerate(action_buttons):
+            btn = ttk.Button(action_container, 
+                           text=btn_config["text"], 
+                           command=btn_config["cmd"],
+                           bootstyle=btn_config["style"], 
+                           width=btn_config["width"])
+            btn.pack(side=LEFT, padx=(8, 0) if i > 0 else (0, 0))
+            self.add_button_hover_effect(btn)
+        
+        # 搜索和筛选区域
+        search_area = ttk.Frame(page, padding=(0, 0, 0, 20))
+        search_area.pack(fill=X)
+        
+        # 搜索容器
+        search_container = ttk.Frame(search_area, padding=(20, 15))
+        search_container.pack(fill=X)
+        
+        # 搜索标题
+        search_title = ttk.Label(search_container, text="🔍 搜索与筛选", 
+                               font=("Microsoft YaHei UI", 12, "bold"))
+        search_title.pack(anchor=tk.W, pady=(0, 10))
+        
+        # 搜索输入区域
+        search_input_frame = ttk.Frame(search_container)
+        search_input_frame.pack(fill=X)
+        
+        # 搜索框
+        self.search_entry = ttk.Entry(search_input_frame, 
+                                    font=("Microsoft YaHei UI", 11), 
+                                    width=40,
+                                    style="Search.TEntry")
+        self.search_entry.pack(side=LEFT, fill=X, expand=True, padx=(0, 10))
+        self.search_entry.bind("<Return>", self.search_products)
+        self.search_entry.bind("<FocusIn>", self.on_search_focus_in)
+        self.search_entry.bind("<FocusOut>", self.on_search_focus_out)
+        
+        # 搜索按钮
+        search_btn = ttk.Button(search_input_frame, text="搜索", 
+                              command=self.search_products, 
+                              bootstyle="primary", width=10)
+        search_btn.pack(side=LEFT, padx=(0, 6))
+        
+        # 清除按钮
+        clear_btn = ttk.Button(search_input_frame, text="清除", 
+                             command=self.clear_search, 
+                             bootstyle="secondary-outline", width=8)
+        clear_btn.pack(side=LEFT)
+        
+        # 设置搜索框占位符
+        self.setup_search_placeholder()
+        
+        # 数据表格区域
+        table_area = ttk.Frame(page)
+        table_area.pack(fill=BOTH, expand=True)
+        
+        # 表格标题栏
+        table_header = ttk.Frame(table_area, padding=(0, 0, 0, 15))
+        table_header.pack(fill=X)
+        
+        # 表格标题
+        table_title_frame = ttk.Frame(table_header)
+        table_title_frame.pack(side=LEFT)
+        
+        table_title = ttk.Label(table_title_frame, text="商品列表", 
+                              font=("Microsoft YaHei UI", 14, "bold"))
+        table_title.pack(side=LEFT)
+        
+        # 数据统计
+        self.data_stats_label = ttk.Label(table_title_frame, text="", 
+                                        font=("Microsoft YaHei UI", 10),
+                                        foreground="#888")
+        self.data_stats_label.pack(side=LEFT, padx=(15, 0))
+        
+        # 表格工具
+        table_tools = ttk.Frame(table_header)
+        table_tools.pack(side=RIGHT)
+        
+        # 刷新按钮
+        refresh_btn = ttk.Button(table_tools, text="🔄 刷新", 
+                               command=self.refresh_data,
+                               bootstyle="outline-primary", width=10)
+        refresh_btn.pack(side=LEFT)
+        
+        # 表格容器
+        table_container = ttk.Frame(table_area)
+        table_container.pack(fill=BOTH, expand=True)
+        
+        # 创建表格
+        self._create_product_table(table_container)
+        
+        return page
+    
+    def _create_coupons_page(self):
+        """创建优惠券页面"""
+        page = ttk.Frame(self.content_area)
+        
+        # 页面标题区域
+        header_area = ttk.Frame(page, padding=(0, 0, 0, 25))
+        header_area.pack(fill=X)
+        
+        # 标题容器
+        title_container = ttk.Frame(header_area)
+        title_container.pack(fill=X)
+        
+        # 主标题
+        main_title = ttk.Label(title_container, text="优惠券管理", 
+                             font=("Microsoft YaHei UI", 20, "bold"))
+        main_title.pack(side=LEFT)
+        
+        # 副标题
+        sub_title = ttk.Label(title_container, text="Coupon Management", 
+                            font=("Microsoft YaHei UI", 11),
+                            foreground="#888")
+        sub_title.pack(side=LEFT, padx=(15, 0), pady=(5, 0))
+        
+        # 操作按钮组
+        action_container = ttk.Frame(title_container)
+        action_container.pack(side=RIGHT)
+        
+        action_buttons = [
+            {"text": "➕ 新增优惠券", "cmd": self._add_coupon, "style": "success", "width": 15},
+            {"text": "✏️ 编辑", "cmd": self._edit_coupon, "style": "warning", "width": 10},
+            {"text": "🗑️ 删除", "cmd": self._delete_coupon, "style": "danger", "width": 10}
+        ]
+        
+        for i, btn_config in enumerate(action_buttons):
+            btn = ttk.Button(action_container, 
+                           text=btn_config["text"], 
+                           command=btn_config["cmd"],
+                           bootstyle=btn_config["style"], 
+                           width=btn_config["width"])
+            btn.pack(side=LEFT, padx=(8, 0) if i > 0 else (0, 0))
+            self.add_button_hover_effect(btn)
+        
+        # 优惠券统计区域
+        stats_area = ttk.Frame(page, padding=(0, 0, 0, 20))
+        stats_area.pack(fill=X)
+        
+        # 统计卡片容器
+        stats_container = ttk.Frame(stats_area)
+        stats_container.pack(fill=X)
+        
+        # 优惠券统计卡片
+        coupon_stats = [
+            {"title": "总优惠券", "value": "0", "icon": "🎫", "color": "#F5A623"},
+            {"title": "启用中", "value": "0", "icon": "✅", "color": "#7ED321"},
+            {"title": "已过期", "value": "0", "icon": "⏰", "color": "#D0021B"}
+        ]
+        
+        for i, stat in enumerate(coupon_stats):
+            card = self._create_coupon_stat_card(stats_container, stat)
+            card.grid(row=0, column=i, padx=(0, 15) if i < 2 else (0, 0), sticky="ew")
+        
+        # 配置网格权重
+        for i in range(3):
+            stats_container.grid_columnconfigure(i, weight=1)
+        
+        # 优惠券列表区域
+        list_area = ttk.Frame(page)
+        list_area.pack(fill=BOTH, expand=True)
+        
+        # 列表标题栏
+        list_header = ttk.Frame(list_area, padding=(0, 0, 0, 15))
+        list_header.pack(fill=X)
+        
+        # 列表标题
+        list_title = ttk.Label(list_header, text="优惠券列表", 
+                             font=("Microsoft YaHei UI", 14, "bold"))
+        list_title.pack(side=LEFT)
+        
+        # 列表工具
+        list_tools = ttk.Frame(list_header)
+        list_tools.pack(side=RIGHT)
+        
+        # 刷新按钮
+        refresh_btn = ttk.Button(list_tools, text="🔄 刷新", 
+                               command=self._refresh_coupons,
+                               bootstyle="outline-primary", width=10)
+        refresh_btn.pack(side=LEFT)
+        
+        # 表格容器
+        table_container = ttk.Frame(list_area)
+        table_container.pack(fill=BOTH, expand=True)
+        
+        # 创建优惠券表格
+        self._create_coupon_table(table_container)
+        
+        return page
+    
+    def _create_coupon_stat_card(self, parent, config):
+        """创建优惠券统计卡片"""
+        card_container = ttk.Frame(parent)
+        
+        card = ttk.Frame(card_container, padding=(15, 12))
+        card.pack(fill=BOTH, expand=True)
+        
+        # 图标和数值
+        top_frame = ttk.Frame(card)
+        top_frame.pack(fill=X, pady=(0, 8))
+        
+        icon_label = ttk.Label(top_frame, text=config["icon"], 
+                              font=("Microsoft YaHei UI", 20))
+        icon_label.pack(side=LEFT)
+        
+        value_label = ttk.Label(top_frame, text=config["value"], 
+                               font=("Microsoft YaHei UI", 24, "bold"),
+                               foreground=config["color"])
+        value_label.pack(side=RIGHT)
+        
+        # 标题
+        title_label = ttk.Label(card, text=config["title"],
+                               font=("Microsoft YaHei UI", 11, "bold"))
+        title_label.pack(anchor=tk.W)
+        
+        self.add_card_hover_effect(card)
+        
+        return card_container
+    
+    def open_coupon_manager(self):
+        """打开优惠券管理窗口（保持兼容性）"""
+        self.show_page("coupons")
     
     def update_time(self):
         """更新时间显示"""
@@ -662,21 +1372,37 @@ class App(ttk.Window):
         self.is_loading_more = is_loading_more
         if not is_loading_more:
             for widget in self.action_buttons:
-                try: widget.config(state=tk.DISABLED if busy else tk.NORMAL)
-                except: pass
-        self.tree.config(cursor="wait" if busy else "")
+                try: 
+                    widget.config(state=tk.DISABLED if busy else tk.NORMAL)
+                except: 
+                    pass
+        
+        # 只在SKU列表页面且tree存在时设置光标
+        if hasattr(self, 'tree') and self.tree:
+            try:
+                self.tree.config(cursor="wait" if busy else "")
+            except:
+                pass
+        
         self.update_idletasks()
 
     def show_skeleton_loader(self):
-        self.tree.delete(*self.tree.get_children())
-        self.tree.configure(style="Skeleton.Treeview")
-        skeleton_item = ('▓▓▓', '▓▓▓▓▓▓▓▓', '▓▓▓▓▓▓', '▓▓▓▓▓▓▓▓▓▓▓', '▓▓.▓▓', '▓▓▓', '▓▓▓▓▓▓▓▓▓▓', '▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓')
-        for i in range(SKELETON_ROWS):
-            self.tree.insert("", tk.END, values=skeleton_item, tags=('skeleton',))
+        # 只在SKU列表页面且tree存在时显示骨架加载
+        if hasattr(self, 'tree') and self.tree:
+            try:
+                self.tree.delete(*self.tree.get_children())
+                self.tree.configure(style="Skeleton.Treeview")
+                skeleton_item = ('▓▓▓', '▓▓▓▓▓▓▓▓', '▓▓▓▓▓▓', '▓▓▓▓▓▓▓▓▓▓▓', '▓▓.▓▓', '▓▓▓', '▓▓▓▓▓▓▓▓▓▓', '▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓')
+                for i in range(SKELETON_ROWS):
+                    self.tree.insert("", tk.END, values=skeleton_item, tags=('skeleton',))
+            except:
+                pass
         
         self.update_status("正在加载数据...", "⏳", True)
-        self.info_label.config(text="")
-        self.data_stats_label.config(text="")
+        if hasattr(self, 'info_label'):
+            self.info_label.config(text="")
+        if hasattr(self, 'data_stats_label'):
+            self.data_stats_label.config(text="")
 
     # --- Core Lazy Loading Logic ---
     def start_new_load(self, query=None, force=False):
@@ -722,56 +1448,80 @@ class App(ttk.Window):
             self.after(0, self.set_busy, False)
 
     def _on_page_load_complete(self, products, is_new_query):
-        # 暂时禁用重绘以提高性能
-        self.tree.configure(cursor="wait")
-        
-        if is_new_query:
-            # 批量删除以提高性能
-            children = self.tree.get_children()
-            if children:
-                self.tree.delete(*children)
-            self.tree.configure(style="Custom.Treeview") # Restore normal style
-            # Clear selection when loading new data
-            self.last_clicked_row = None
-            self.last_clicked_column_index = -1
-
-        # 批量插入数据以提高性能
-        if products:
-            items_to_insert = []
-            for product_row in products:
-                reordered_values = [product_row[col] for col in DISPLAY_COLUMNS]
-                items_to_insert.append(tuple(reordered_values))
+        # 只在SKU列表页面且tree存在时处理
+        if not (hasattr(self, 'tree') and self.tree):
+            return
             
-            # 分批插入，避免界面卡顿
-            batch_size = 20
-            for i in range(0, len(items_to_insert), batch_size):
-                batch = items_to_insert[i:i+batch_size]
-                for values in batch:
-                    self.tree.insert("", tk.END, values=values)
-                
-                # 每批次后更新界面，保持响应性
-                if i + batch_size < len(items_to_insert):
-                    self.update_idletasks()
-        
-        self.current_offset += len(products)
-        if self.current_offset >= self.total_items:
-            self.all_data_loaded = True
+        try:
+            # 暂时禁用重绘以提高性能
+            self.tree.configure(cursor="wait")
+            
+            if is_new_query:
+                # 批量删除以提高性能
+                children = self.tree.get_children()
+                if children:
+                    self.tree.delete(*children)
+                self.tree.configure(style="Custom.Treeview") # Restore normal style
+                # Clear selection when loading new data
+                self.last_clicked_row = None
+                self.last_clicked_column_index = -1
 
-        if self.current_query:
-            status_text = f"搜索 \"{self.current_query}\" 找到 {self.total_items} 条结果"
-            info_text = f"已显示 {self.current_offset} / {self.total_items}"
-            icon = "🔍"
-        else:
-            status_text = "数据加载完成"
-            info_text = f"共 {self.total_items} 条记录，已显示 {self.current_offset} 条"
-            icon = "✅"
+            # 批量插入数据以提高性能
+            if products:
+                items_to_insert = []
+                for product_row in products:
+                    # 计算到手价
+                    product_dict = dict(zip(database.DB_COLUMNS, product_row))
+                    final_price = database.calculate_final_price(
+                        product_dict.get('price', 0), 
+                        product_dict.get('shop', '')
+                    )
+                    
+                    # 构建显示数据，包含到手价
+                    display_data = {}
+                    for col in database.DB_COLUMNS:
+                        display_data[col] = product_dict[col]
+                    display_data['final_price'] = final_price
+                    
+                    reordered_values = [display_data.get(col, '') for col in DISPLAY_COLUMNS]
+                    items_to_insert.append(tuple(reordered_values))
+                
+                # 分批插入，避免界面卡顿
+                batch_size = 20
+                for i in range(0, len(items_to_insert), batch_size):
+                    batch = items_to_insert[i:i+batch_size]
+                    for values in batch:
+                        self.tree.insert("", tk.END, values=values)
+                    
+                    # 每批次后更新界面，保持响应性
+                    if i + batch_size < len(items_to_insert):
+                        self.update_idletasks()
+            
+            self.current_offset += len(products)
+            if self.current_offset >= self.total_items:
+                self.all_data_loaded = True
+
+            if self.current_query:
+                status_text = f"搜索 \"{self.current_query}\" 找到 {self.total_items} 条结果"
+                info_text = f"已显示 {self.current_offset} / {self.total_items}"
+                icon = "🔍"
+            else:
+                status_text = "数据加载完成"
+                info_text = f"共 {self.total_items} 条记录，已显示 {self.current_offset} 条"
+                icon = "✅"
+            
+            self.update_status(status_text, icon)
+            if hasattr(self, 'info_label'):
+                self.info_label.config(text=info_text)
+            if hasattr(self, 'data_stats_label'):
+                self.data_stats_label.config(text=f"({self.current_offset}/{self.total_items})")
+            
+            # 恢复正常光标
+            self.tree.configure(cursor="")
+            
+        except Exception as e:
+            print(f"页面加载完成时出错: {e}")
         
-        self.update_status(status_text, icon)
-        self.info_label.config(text=info_text)
-        self.data_stats_label.config(text=f"({self.current_offset}/{self.total_items})")
-        
-        # 恢复正常光标
-        self.tree.configure(cursor="")
         self.set_busy(False)
 
     # --- Event Handlers ---
@@ -992,6 +1742,349 @@ class App(ttk.Window):
         if len(selected_items) > 1: return messagebox.showwarning("警告", "一次只能编辑一个商品。")
         product_data = dict(zip(DISPLAY_COLUMNS, self.tree.item(selected_items[0], 'values')))
         ProductEditorWindow(self, product=product_data)
+
+# --- 优惠券管理窗口 ---
+class CouponManagerWindow(ttk.Toplevel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.parent = parent
+        self.title("优惠券管理")
+        self.geometry("900x600")
+        self.minsize(800, 500)
+        self.transient(parent)
+        self.grab_set()
+        
+        self.center_window()
+        self._build_ui()
+        self.load_coupons()
+    
+    def center_window(self):
+        """窗口居中显示"""
+        self.update_idletasks()
+        x = (self.winfo_screenwidth() // 2) - (self.winfo_width() // 2)
+        y = (self.winfo_screenheight() // 2) - (self.winfo_height() // 2)
+        self.geometry(f"+{x}+{y}")
+    
+    def _build_ui(self):
+        # 主容器
+        main_frame = ttk.Frame(self, padding=(20, 20, 20, 20))
+        main_frame.pack(fill=BOTH, expand=True)
+        
+        # 标题
+        title_label = ttk.Label(main_frame, text="🎫 优惠券管理", 
+                               font=("Microsoft YaHei UI", 16, "bold"))
+        title_label.pack(pady=(0, 20))
+        
+        # 操作按钮栏
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(fill=X, pady=(0, 15))
+        
+        ttk.Button(button_frame, text="➕ 新增优惠券", command=self.add_coupon,
+                  bootstyle="success", width=15).pack(side=LEFT, padx=(0, 10))
+        ttk.Button(button_frame, text="✏️ 编辑", command=self.edit_coupon,
+                  bootstyle="warning", width=10).pack(side=LEFT, padx=(0, 10))
+        ttk.Button(button_frame, text="🗑️ 删除", command=self.delete_coupon,
+                  bootstyle="danger", width=10).pack(side=LEFT, padx=(0, 10))
+        ttk.Button(button_frame, text="🔄 刷新", command=self.load_coupons,
+                  bootstyle="secondary", width=10).pack(side=RIGHT)
+        
+        # 优惠券列表
+        list_frame = ttk.Frame(main_frame)
+        list_frame.pack(fill=BOTH, expand=True)
+        
+        # 表格
+        columns = ['id', 'shop', 'coupon_type', 'amount', 'min_price', 
+                  'start_date', 'end_date', 'description', 'is_active']
+        
+        self.coupon_tree = ttk.Treeview(list_frame, columns=columns, show="headings", height=15)
+        
+        # 配置列
+        column_configs = {
+            'id': {'width': 50, 'anchor': CENTER},
+            'shop': {'width': 100, 'anchor': CENTER},
+            'coupon_type': {'width': 80, 'anchor': CENTER},
+            'amount': {'width': 80, 'anchor': CENTER},
+            'min_price': {'width': 80, 'anchor': CENTER},
+            'start_date': {'width': 100, 'anchor': CENTER},
+            'end_date': {'width': 100, 'anchor': CENTER},
+            'description': {'width': 150, 'anchor': tk.W},
+            'is_active': {'width': 60, 'anchor': CENTER}
+        }
+        
+        for col in columns:
+            header_text = COUPON_HEADER_MAP.get(col, col)
+            self.coupon_tree.heading(col, text=header_text, anchor=CENTER)
+            config = column_configs.get(col, {'width': 100, 'anchor': CENTER})
+            self.coupon_tree.column(col, **config, minwidth=50)
+        
+        # 滚动条
+        v_scrollbar = ttk.Scrollbar(list_frame, orient=VERTICAL, command=self.coupon_tree.yview)
+        h_scrollbar = ttk.Scrollbar(list_frame, orient=HORIZONTAL, command=self.coupon_tree.xview)
+        
+        self.coupon_tree.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
+        
+        # 布局
+        self.coupon_tree.grid(row=0, column=0, sticky="nsew")
+        v_scrollbar.grid(row=0, column=1, sticky="ns")
+        h_scrollbar.grid(row=1, column=0, sticky="ew")
+        
+        list_frame.grid_rowconfigure(0, weight=1)
+        list_frame.grid_columnconfigure(0, weight=1)
+        
+        # 双击编辑
+        self.coupon_tree.bind("<Double-Button-1>", lambda e: self.edit_coupon())
+    
+    def load_coupons(self):
+        """加载优惠券数据"""
+        # 清空现有数据
+        for item in self.coupon_tree.get_children():
+            self.coupon_tree.delete(item)
+        
+        # 加载数据
+        coupons = database.get_all_coupons()
+        for coupon in coupons:
+            coupon_dict = dict(zip(database.COUPON_COLUMNS, coupon))
+            
+            # 格式化显示数据
+            display_data = []
+            for col in ['id', 'shop', 'coupon_type', 'amount', 'min_price', 
+                       'start_date', 'end_date', 'description', 'is_active']:
+                value = coupon_dict[col]
+                
+                if col == 'coupon_type':
+                    value = '固定金额' if value == 'fixed' else '百分比'
+                elif col == 'amount':
+                    coupon_type = coupon_dict['coupon_type']
+                    if coupon_type == 'fixed':
+                        value = f"¥{value}"
+                    else:
+                        value = f"{value}%"
+                elif col == 'is_active':
+                    value = '启用' if value else '禁用'
+                
+                display_data.append(str(value))
+            
+            self.coupon_tree.insert("", tk.END, values=display_data)
+    
+    def add_coupon(self):
+        """添加优惠券"""
+        CouponEditorWindow(self)
+    
+    def edit_coupon(self):
+        """编辑优惠券"""
+        selected = self.coupon_tree.selection()
+        if not selected:
+            messagebox.showwarning("警告", "请选择要编辑的优惠券", parent=self)
+            return
+        
+        item = selected[0]
+        values = self.coupon_tree.item(item, 'values')
+        coupon_id = values[0]
+        
+        coupon = database.get_coupon_by_id(coupon_id)
+        if coupon:
+            coupon_dict = dict(zip(database.COUPON_COLUMNS, coupon))
+            CouponEditorWindow(self, coupon_dict)
+    
+    def delete_coupon(self):
+        """删除优惠券"""
+        selected = self.coupon_tree.selection()
+        if not selected:
+            messagebox.showwarning("警告", "请选择要删除的优惠券", parent=self)
+            return
+        
+        if messagebox.askyesno("确认删除", "确定要删除选中的优惠券吗？", parent=self):
+            for item in selected:
+                values = self.coupon_tree.item(item, 'values')
+                coupon_id = values[0]
+                database.delete_coupon(coupon_id)
+            
+            self.load_coupons()
+            messagebox.showinfo("成功", "优惠券删除成功", parent=self)
+
+# --- 优惠券编辑窗口 ---
+class CouponEditorWindow(ttk.Toplevel):
+    def __init__(self, parent, coupon=None):
+        super().__init__(parent)
+        self.parent = parent
+        self.coupon = coupon
+        self.title("编辑优惠券" if coupon else "新增优惠券")
+        self.geometry("500x600")
+        self.minsize(450, 550)
+        self.transient(parent)
+        self.grab_set()
+        
+        self.center_window()
+        self._build_ui()
+    
+    def center_window(self):
+        """窗口居中显示"""
+        self.update_idletasks()
+        x = (self.winfo_screenwidth() // 2) - (self.winfo_width() // 2)
+        y = (self.winfo_screenheight() // 2) - (self.winfo_height() // 2)
+        self.geometry(f"+{x}+{y}")
+    
+    def _build_ui(self):
+        # 主容器
+        main_frame = ttk.Frame(self, padding=(30, 25, 30, 25))
+        main_frame.pack(fill=BOTH, expand=True)
+        
+        # 标题
+        title_text = "编辑优惠券" if self.coupon else "新增优惠券"
+        title_label = ttk.Label(main_frame, text=title_text, 
+                               font=("Microsoft YaHei UI", 16, "bold"))
+        title_label.grid(row=0, column=0, columnspan=2, pady=(0, 25), sticky=tk.W)
+        
+        # 表单字段
+        self.entries = {}
+        row = 1
+        
+        # 店铺
+        ttk.Label(main_frame, text="店铺", font=("Microsoft YaHei UI", 11)).grid(
+            row=row, column=0, padx=(0, 20), pady=(0, 18), sticky=tk.W)
+        self.entries['shop'] = ttk.Entry(main_frame, font=("Microsoft YaHei UI", 11), width=28)
+        self.entries['shop'].grid(row=row, column=1, pady=(0, 18), sticky=tk.EW)
+        row += 1
+        
+        # 优惠券类型
+        ttk.Label(main_frame, text="类型", font=("Microsoft YaHei UI", 11)).grid(
+            row=row, column=0, padx=(0, 20), pady=(0, 18), sticky=tk.W)
+        self.coupon_type_var = tk.StringVar(value="fixed")
+        type_frame = ttk.Frame(main_frame)
+        type_frame.grid(row=row, column=1, pady=(0, 18), sticky=tk.W)
+        ttk.Radiobutton(type_frame, text="固定金额", variable=self.coupon_type_var, 
+                       value="fixed").pack(side=LEFT, padx=(0, 20))
+        ttk.Radiobutton(type_frame, text="百分比", variable=self.coupon_type_var, 
+                       value="percent").pack(side=LEFT)
+        row += 1
+        
+        # 面额
+        ttk.Label(main_frame, text="面额", font=("Microsoft YaHei UI", 11)).grid(
+            row=row, column=0, padx=(0, 20), pady=(0, 18), sticky=tk.W)
+        self.entries['amount'] = ttk.Entry(main_frame, font=("Microsoft YaHei UI", 11), width=28)
+        self.entries['amount'].grid(row=row, column=1, pady=(0, 18), sticky=tk.EW)
+        row += 1
+        
+        # 最低消费
+        ttk.Label(main_frame, text="最低消费", font=("Microsoft YaHei UI", 11)).grid(
+            row=row, column=0, padx=(0, 20), pady=(0, 18), sticky=tk.W)
+        self.entries['min_price'] = ttk.Entry(main_frame, font=("Microsoft YaHei UI", 11), width=28)
+        self.entries['min_price'].grid(row=row, column=1, pady=(0, 18), sticky=tk.EW)
+        row += 1
+        
+        # 开始日期
+        ttk.Label(main_frame, text="开始日期", font=("Microsoft YaHei UI", 11)).grid(
+            row=row, column=0, padx=(0, 20), pady=(0, 18), sticky=tk.W)
+        self.entries['start_date'] = ttk.Entry(main_frame, font=("Microsoft YaHei UI", 11), width=28)
+        self.entries['start_date'].grid(row=row, column=1, pady=(0, 18), sticky=tk.EW)
+        row += 1
+        
+        # 结束日期
+        ttk.Label(main_frame, text="结束日期", font=("Microsoft YaHei UI", 11)).grid(
+            row=row, column=0, padx=(0, 20), pady=(0, 18), sticky=tk.W)
+        self.entries['end_date'] = ttk.Entry(main_frame, font=("Microsoft YaHei UI", 11), width=28)
+        self.entries['end_date'].grid(row=row, column=1, pady=(0, 18), sticky=tk.EW)
+        row += 1
+        
+        # 描述
+        ttk.Label(main_frame, text="描述", font=("Microsoft YaHei UI", 11)).grid(
+            row=row, column=0, padx=(0, 20), pady=(0, 18), sticky=tk.NW)
+        self.entries['description'] = tk.Text(main_frame, font=("Microsoft YaHei UI", 11), 
+                                            width=28, height=4)
+        self.entries['description'].grid(row=row, column=1, pady=(0, 18), sticky=tk.EW)
+        row += 1
+        
+        # 是否启用
+        self.is_active_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(main_frame, text="启用优惠券", variable=self.is_active_var,
+                       bootstyle="round-toggle").grid(row=row, column=0, columnspan=2, 
+                                                     pady=(10, 20), sticky=tk.W)
+        row += 1
+        
+        main_frame.grid_columnconfigure(1, weight=1)
+        
+        # 填充现有数据
+        if self.coupon:
+            self.entries['shop'].insert(0, self.coupon.get('shop', ''))
+            self.coupon_type_var.set(self.coupon.get('coupon_type', 'fixed'))
+            self.entries['amount'].insert(0, str(self.coupon.get('amount', '')))
+            self.entries['min_price'].insert(0, str(self.coupon.get('min_price', '0')))
+            self.entries['start_date'].insert(0, self.coupon.get('start_date', ''))
+            self.entries['end_date'].insert(0, self.coupon.get('end_date', ''))
+            self.entries['description'].insert('1.0', self.coupon.get('description', ''))
+            self.is_active_var.set(bool(self.coupon.get('is_active', 1)))
+        else:
+            # 默认日期
+            from datetime import datetime, timedelta
+            today = datetime.now()
+            self.entries['start_date'].insert(0, today.strftime('%Y-%m-%d'))
+            self.entries['end_date'].insert(0, (today + timedelta(days=30)).strftime('%Y-%m-%d'))
+        
+        # 按钮区域
+        button_frame = ttk.Frame(main_frame)
+        button_frame.grid(row=row, column=0, columnspan=2, pady=(25, 0), sticky=tk.EW)
+        
+        ttk.Button(button_frame, text="取消", command=self.destroy, 
+                  bootstyle="secondary", width=12).pack(side=RIGHT, padx=(10, 0))
+        ttk.Button(button_frame, text="保存", command=self.save, 
+                  bootstyle="success", width=12).pack(side=RIGHT)
+    
+    def save(self):
+        """保存优惠券"""
+        try:
+            # 收集数据
+            coupon_data = {
+                'shop': self.entries['shop'].get().strip(),
+                'coupon_type': self.coupon_type_var.get(),
+                'amount': float(self.entries['amount'].get() or 0),
+                'min_price': float(self.entries['min_price'].get() or 0),
+                'start_date': self.entries['start_date'].get().strip(),
+                'end_date': self.entries['end_date'].get().strip(),
+                'description': self.entries['description'].get('1.0', tk.END).strip(),
+                'is_active': 1 if self.is_active_var.get() else 0
+            }
+            
+            # 验证数据
+            if not coupon_data['shop']:
+                messagebox.showerror("错误", "店铺不能为空", parent=self)
+                return
+            
+            if coupon_data['amount'] <= 0:
+                messagebox.showerror("错误", "面额必须大于0", parent=self)
+                return
+            
+            if not coupon_data['start_date'] or not coupon_data['end_date']:
+                messagebox.showerror("错误", "开始日期和结束日期不能为空", parent=self)
+                return
+            
+            # 保存到数据库
+            if self.coupon:
+                coupon_data['id'] = self.coupon['id']
+                database.update_coupon(coupon_data)
+                messagebox.showinfo("成功", "优惠券更新成功", parent=self)
+            else:
+                database.add_coupon(coupon_data)
+                messagebox.showinfo("成功", "优惠券添加成功", parent=self)
+            
+            # 刷新数据
+            if hasattr(self.parent, '_refresh_coupons'):
+                # 如果是主窗口调用
+                self.parent._refresh_coupons()
+                # 刷新SKU列表的到手价
+                if hasattr(self.parent, 'tree'):
+                    self.parent.start_new_load(force=True)
+            elif hasattr(self.parent, 'load_coupons'):
+                # 如果是优惠券管理窗口调用
+                self.parent.load_coupons()
+                if hasattr(self.parent, 'parent'):
+                    self.parent.parent.start_new_load(force=True)
+            
+            self.destroy()
+            
+        except ValueError:
+            messagebox.showerror("错误", "面额和最低消费必须是有效的数字", parent=self)
+        except Exception as e:
+            messagebox.showerror("保存失败", f"发生错误: {e}", parent=self)
 
 if __name__ == "__main__":
     database.init_db()
