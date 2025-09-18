@@ -19,9 +19,9 @@ def init_db():
     # Using TEXT for all IDs as they might be non-numeric
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS products (
-            sku TEXT PRIMARY KEY,
+            spec_id TEXT PRIMARY KEY,
+            sku TEXT,
             product_id TEXT,
-            spec_id TEXT,
             name TEXT NOT NULL,
             spec_name TEXT,
             price REAL,
@@ -33,6 +33,7 @@ def init_db():
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_name ON products (name)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_spec_name ON products (spec_name)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_product_id ON products (product_id)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_sku ON products (sku)') # Add index for sku
     
     conn.commit()
     conn.close()
@@ -61,8 +62,6 @@ def add_product_batch(products):
     net_rows_added = final_row_count - initial_row_count
     rows_processed = len(products)
     
-    # If net_rows_added is negative, it means deletions happened, which is not possible with INSERT OR REPLACE.
-    # We are only inserting or updating. So updated rows are the ones that didn't add to the count.
     rows_updated = max(0, rows_processed - net_rows_added)
 
     return {'added': net_rows_added, 'updated': rows_updated}
@@ -110,19 +109,19 @@ def search_products_count(query):
     conn.close()
     return count
 
-def delete_product(sku):
-    """Deletes a product from the database by SKU."""
+def delete_product_by_spec_id(spec_id):
+    """Deletes a product from the database by spec_id."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('DELETE FROM products WHERE sku = ?', (sku,))
+    cursor.execute('DELETE FROM products WHERE spec_id = ?', (spec_id,))
     conn.commit()
     conn.close()
 
-def get_product_by_sku(sku):
-    """Retrieves a single product by its SKU."""
+def get_product_by_spec_id(spec_id):
+    """Retrieves a single product by its spec_id."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute(f'SELECT {", ".join(DB_COLUMNS)} FROM products WHERE sku = ?', (sku,))
+    cursor.execute(f'SELECT {", ".join(DB_COLUMNS)} FROM products WHERE spec_id = ?', (spec_id,))
     product = cursor.fetchone()
     conn.close()
     return product
@@ -147,12 +146,12 @@ def update_product(product_data):
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    update_cols = [col for col in DB_COLUMNS if col != 'sku']
+    update_cols = [col for col in DB_COLUMNS if col != 'spec_id']
     set_clause = ", ".join([f"{col} = ?" for col in update_cols])
-    sql = f'UPDATE products SET {set_clause} WHERE sku = ?'
+    sql = f'UPDATE products SET {set_clause} WHERE spec_id = ?'
     
-    # Ensure data is in the correct order for SET clause, with SKU at the end for WHERE
-    ordered_values = [product_data.get(col) for col in update_cols] + [product_data.get('sku')]
+    # Ensure data is in the correct order for SET clause, with spec_id at the end for WHERE
+    ordered_values = [product_data.get(col) for col in update_cols] + [product_data.get('spec_id')]
     
     cursor.execute(sql, ordered_values)
     conn.commit()
