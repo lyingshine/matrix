@@ -6,6 +6,7 @@ import pandas as pd
 import database
 from database import DB_COLUMNS
 import threading
+import json
 
 # --- Constants ---
 HEADER_MAP = {
@@ -29,12 +30,20 @@ COUPON_HEADER_MAP = {
     'id': 'ID',
     'shop': '店铺',
     'coupon_type': '类型',
-    'amount': '面额',
+    'amount': '面额/折扣',
     'min_price': '最低消费',
     'start_date': '开始日期',
     'end_date': '结束日期',
     'description': '描述',
-    'is_active': '状态'
+    'is_active': '状态',
+    'product_ids': '适用货品'
+}
+
+# 优惠券类型映射
+COUPON_TYPE_MAP = {
+    'instant': '立减券',
+    'threshold': '满减券', 
+    'discount': '折扣券'
 }
 PAGE_SIZE = 100  # Number of items to load per page - 增加页面大小减少加载次数
 SKELETON_ROWS = 15 # Number of placeholder rows to show
@@ -603,7 +612,7 @@ class App(ttk.Window):
     
     def setup_search_placeholder(self):
         """设置搜索框占位符"""
-        self.placeholder_text = "按 SKU、名称、规格等搜索..."
+        self.placeholder_text = "按 SKU、货品ID、名称、规格等搜索..."
         self.placeholder_color = '#888'
         try: 
             self.default_fg_color = self.search_entry.cget("foreground")
@@ -763,22 +772,23 @@ class App(ttk.Window):
         tree_frame.pack(fill=BOTH, expand=True)
         
         columns = ['id', 'shop', 'coupon_type', 'amount', 'min_price', 
-                  'start_date', 'end_date', 'description', 'is_active']
+                  'start_date', 'end_date', 'description', 'product_ids', 'is_active']
         
         self.coupon_tree = ttk.Treeview(tree_frame, columns=columns, show="headings", 
                                        style="Enhanced.Treeview", height=15)
         
         # 配置列
         column_configs = {
-            'id': {'width': 60, 'anchor': CENTER},
-            'shop': {'width': 120, 'anchor': CENTER},
-            'coupon_type': {'width': 100, 'anchor': CENTER},
-            'amount': {'width': 100, 'anchor': CENTER},
-            'min_price': {'width': 100, 'anchor': CENTER},
-            'start_date': {'width': 120, 'anchor': CENTER},
-            'end_date': {'width': 120, 'anchor': CENTER},
-            'description': {'width': 200, 'anchor': tk.W},
-            'is_active': {'width': 80, 'anchor': CENTER}
+            'id': {'width': 50, 'anchor': CENTER},
+            'shop': {'width': 100, 'anchor': CENTER},
+            'coupon_type': {'width': 80, 'anchor': CENTER},
+            'amount': {'width': 90, 'anchor': CENTER},
+            'min_price': {'width': 80, 'anchor': CENTER},
+            'start_date': {'width': 100, 'anchor': CENTER},
+            'end_date': {'width': 100, 'anchor': CENTER},
+            'description': {'width': 150, 'anchor': tk.W},
+            'product_ids': {'width': 120, 'anchor': CENTER},
+            'is_active': {'width': 60, 'anchor': CENTER}
         }
         
         for col in columns:
@@ -842,6 +852,9 @@ class App(ttk.Window):
         for item in self.coupon_tree.get_children():
             self.coupon_tree.delete(item)
         
+        # 更新统计数据
+        self._update_coupon_stats()
+        
         # 加载数据
         coupons = database.get_all_coupons()
         for coupon in coupons:
@@ -850,23 +863,45 @@ class App(ttk.Window):
             # 格式化显示数据
             display_data = []
             for col in ['id', 'shop', 'coupon_type', 'amount', 'min_price', 
-                       'start_date', 'end_date', 'description', 'is_active']:
+                       'start_date', 'end_date', 'description', 'product_ids', 'is_active']:
                 value = coupon_dict[col]
                 
                 if col == 'coupon_type':
-                    value = '固定金额' if value == 'fixed' else '百分比'
+                    value = COUPON_TYPE_MAP.get(value, value)
                 elif col == 'amount':
                     coupon_type = coupon_dict['coupon_type']
-                    if coupon_type == 'fixed':
-                        value = f"¥{value}"
+                    if coupon_type == 'discount':
+                        value = f"{int(value * 100)}%"  # 折扣显示为百分比
                     else:
-                        value = f"{value}%"
+                        value = f"¥{value}"  # 立减券和满减券显示金额
+                elif col == 'product_ids':
+                    if value:
+                        try:
+                            product_ids = json.loads(value)
+                            value = f"指定货品({len(product_ids)}个)"
+                        except:
+                            value = "指定货品"
+                    else:
+                        value = "全店通用"
                 elif col == 'is_active':
                     value = '启用' if value else '禁用'
                 
                 display_data.append(str(value))
             
             self.coupon_tree.insert("", tk.END, values=display_data)
+    
+    def _update_coupon_stats(self):
+        """更新优惠券统计数据"""
+        try:
+            stats = database.get_coupon_stats()
+            
+            # 更新统计卡片
+            if hasattr(self, 'coupon_stats_cards'):
+                self.coupon_stats_cards['total'].value_label.config(text=str(stats['total']))
+                self.coupon_stats_cards['active'].value_label.config(text=str(stats['active']))
+                self.coupon_stats_cards['expired'].value_label.config(text=str(stats['expired']))
+        except Exception as e:
+            print(f"更新优惠券统计数据时出错: {e}")
     
     def _add_coupon(self):
         """添加优惠券"""
@@ -1266,14 +1301,18 @@ class App(ttk.Window):
         
         # 优惠券统计卡片
         coupon_stats = [
-            {"title": "总优惠券", "value": "0", "icon": "🎫", "color": "#F5A623"},
-            {"title": "启用中", "value": "0", "icon": "✅", "color": "#7ED321"},
-            {"title": "已过期", "value": "0", "icon": "⏰", "color": "#D0021B"}
+            {"title": "总优惠券", "value": "0", "icon": "🎫", "color": "#F5A623", "key": "total"},
+            {"title": "启用中", "value": "0", "icon": "✅", "color": "#7ED321", "key": "active"},
+            {"title": "已过期", "value": "0", "icon": "⏰", "color": "#D0021B", "key": "expired"}
         ]
+        
+        # 存储统计卡片引用
+        self.coupon_stats_cards = {}
         
         for i, stat in enumerate(coupon_stats):
             card = self._create_coupon_stat_card(stats_container, stat)
             card.grid(row=0, column=i, padx=(0, 15) if i < 2 else (0, 0), sticky="ew")
+            self.coupon_stats_cards[stat["key"]] = card
         
         # 配置网格权重
         for i in range(3):
@@ -1309,6 +1348,9 @@ class App(ttk.Window):
         # 创建优惠券表格
         self._create_coupon_table(table_container)
         
+        # 初始化数据加载
+        self.after(100, self._refresh_coupons)  # 延迟加载以确保UI完全创建
+        
         return page
     
     def _create_coupon_stat_card(self, parent, config):
@@ -1337,6 +1379,9 @@ class App(ttk.Window):
         title_label.pack(anchor=tk.W)
         
         self.add_card_hover_effect(card)
+        
+        # 将value_label附加到card_container以便后续访问
+        card_container.value_label = value_label
         
         return card_container
     
@@ -1474,7 +1519,8 @@ class App(ttk.Window):
                     product_dict = dict(zip(database.DB_COLUMNS, product_row))
                     final_price = database.calculate_final_price(
                         product_dict.get('price', 0), 
-                        product_dict.get('shop', '')
+                        product_dict.get('shop', ''),
+                        product_dict.get('product_id', '')
                     )
                     
                     # 构建显示数据，包含到手价
@@ -1665,6 +1711,10 @@ class App(ttk.Window):
             report_df = df.copy(); total_rows = len(report_df)
             invalid_ids = set(df_sheet2['无效的规格ID'].dropna().astype(str).str.strip().str.lower())
             enabled_codes = set(df_sheet3['启用的规格编码'].dropna().astype(str).str.strip())
+            
+            # 更新数据库中的筛选条件
+            database.update_invalid_spec_ids(invalid_ids)
+            database.update_enabled_skus(enabled_codes)
             report_df['_clean_spec_id'] = report_df['规格ID'].astype(str).str.strip().str.lower()
             report_df['_clean_sku'] = report_df['规格编码'].astype(str).str.strip()
             reasons = [('无效的规格ID' if row['_clean_spec_id'] in invalid_ids else ('规格编码未启用' if row['_clean_sku'] != '*' and row['_clean_sku'] not in enabled_codes else '')) for _, row in report_df.iterrows()]
@@ -1939,35 +1989,54 @@ class CouponEditorWindow(ttk.Toplevel):
         self.entries = {}
         row = 1
         
-        # 店铺
+        # 店铺下拉选择
         ttk.Label(main_frame, text="店铺", font=("Microsoft YaHei UI", 11)).grid(
             row=row, column=0, padx=(0, 20), pady=(0, 18), sticky=tk.W)
-        self.entries['shop'] = ttk.Entry(main_frame, font=("Microsoft YaHei UI", 11), width=28)
-        self.entries['shop'].grid(row=row, column=1, pady=(0, 18), sticky=tk.EW)
+        
+        self.shop_var = tk.StringVar()
+        self.shop_combobox = ttk.Combobox(main_frame, textvariable=self.shop_var,
+                                        font=("Microsoft YaHei UI", 11), width=26,
+                                        state="readonly")
+        self.shop_combobox.grid(row=row, column=1, pady=(0, 18), sticky=tk.EW)
+        self.shop_combobox.bind("<<ComboboxSelected>>", self.on_shop_changed)
+        
+        # 加载店铺列表
+        shops = database.get_all_shops()
+        self.shop_combobox['values'] = shops
         row += 1
         
         # 优惠券类型
         ttk.Label(main_frame, text="类型", font=("Microsoft YaHei UI", 11)).grid(
             row=row, column=0, padx=(0, 20), pady=(0, 18), sticky=tk.W)
-        self.coupon_type_var = tk.StringVar(value="fixed")
+        self.coupon_type_var = tk.StringVar(value="instant")
         type_frame = ttk.Frame(main_frame)
         type_frame.grid(row=row, column=1, pady=(0, 18), sticky=tk.W)
-        ttk.Radiobutton(type_frame, text="固定金额", variable=self.coupon_type_var, 
-                       value="fixed").pack(side=LEFT, padx=(0, 20))
-        ttk.Radiobutton(type_frame, text="百分比", variable=self.coupon_type_var, 
-                       value="percent").pack(side=LEFT)
+        
+        ttk.Radiobutton(type_frame, text="立减券", variable=self.coupon_type_var, 
+                       value="instant", command=self.on_type_changed).pack(side=LEFT, padx=(0, 15))
+        ttk.Radiobutton(type_frame, text="满减券", variable=self.coupon_type_var, 
+                       value="threshold", command=self.on_type_changed).pack(side=LEFT, padx=(0, 15))
+        ttk.Radiobutton(type_frame, text="折扣券", variable=self.coupon_type_var, 
+                       value="discount", command=self.on_type_changed).pack(side=LEFT)
         row += 1
         
-        # 面额
-        ttk.Label(main_frame, text="面额", font=("Microsoft YaHei UI", 11)).grid(
-            row=row, column=0, padx=(0, 20), pady=(0, 18), sticky=tk.W)
-        self.entries['amount'] = ttk.Entry(main_frame, font=("Microsoft YaHei UI", 11), width=28)
-        self.entries['amount'].grid(row=row, column=1, pady=(0, 18), sticky=tk.EW)
+        # 面额/折扣
+        self.amount_label = ttk.Label(main_frame, text="面额", font=("Microsoft YaHei UI", 11))
+        self.amount_label.grid(row=row, column=0, padx=(0, 20), pady=(0, 18), sticky=tk.W)
+        
+        amount_frame = ttk.Frame(main_frame)
+        amount_frame.grid(row=row, column=1, pady=(0, 18), sticky=tk.EW)
+        
+        self.entries['amount'] = ttk.Entry(amount_frame, font=("Microsoft YaHei UI", 11), width=20)
+        self.entries['amount'].pack(side=LEFT, fill=X, expand=True)
+        
+        self.amount_unit_label = ttk.Label(amount_frame, text="元", font=("Microsoft YaHei UI", 11))
+        self.amount_unit_label.pack(side=LEFT, padx=(5, 0))
         row += 1
         
-        # 最低消费
-        ttk.Label(main_frame, text="最低消费", font=("Microsoft YaHei UI", 11)).grid(
-            row=row, column=0, padx=(0, 20), pady=(0, 18), sticky=tk.W)
+        # 最低消费（满减券专用）
+        self.min_price_label = ttk.Label(main_frame, text="最低消费", font=("Microsoft YaHei UI", 11))
+        self.min_price_label.grid(row=row, column=0, padx=(0, 20), pady=(0, 18), sticky=tk.W)
         self.entries['min_price'] = ttk.Entry(main_frame, font=("Microsoft YaHei UI", 11), width=28)
         self.entries['min_price'].grid(row=row, column=1, pady=(0, 18), sticky=tk.EW)
         row += 1
@@ -1986,11 +2055,120 @@ class CouponEditorWindow(ttk.Toplevel):
         self.entries['end_date'].grid(row=row, column=1, pady=(0, 18), sticky=tk.EW)
         row += 1
         
+        # 适用商品选择
+        ttk.Label(main_frame, text="适用范围", font=("Microsoft YaHei UI", 11)).grid(
+            row=row, column=0, padx=(0, 20), pady=(0, 18), sticky=tk.NW)
+        
+        product_frame = ttk.Frame(main_frame)
+        product_frame.grid(row=row, column=1, pady=(0, 18), sticky=tk.EW)
+        
+        # 全店/指定货品选择
+        self.product_scope_var = tk.StringVar(value="all")
+        ttk.Radiobutton(product_frame, text="全店通用", variable=self.product_scope_var, 
+                       value="all", command=self.on_scope_changed).pack(anchor=tk.W)
+        ttk.Radiobutton(product_frame, text="指定货品", variable=self.product_scope_var, 
+                       value="specific", command=self.on_scope_changed).pack(anchor=tk.W, pady=(5, 0))
+        
+        # 说明文字
+        hint_label = ttk.Label(product_frame, text="注：选择货品后，优惠券将对该货品下的所有SKU生效", 
+                             font=("Microsoft YaHei UI", 8), foreground="#666")
+        hint_label.pack(anchor=tk.W, pady=(2, 0))
+        
+        # 详细说明
+        detail_label = ttk.Label(product_frame, text="例如：选择货品A，则货品A的所有规格（SKU）都可使用此优惠券", 
+                               font=("Microsoft YaHei UI", 8), foreground="#888")
+        detail_label.pack(anchor=tk.W, pady=(2, 0))
+        
+        # 商品搜索和选择区域
+        self.product_listbox_frame = ttk.Frame(product_frame)
+        self.product_listbox_frame.pack(fill=BOTH, expand=True, pady=(10, 0))
+        
+        # 商品搜索框
+        search_frame = ttk.Frame(self.product_listbox_frame)
+        search_frame.pack(fill=X, pady=(0, 8))
+        
+        ttk.Label(search_frame, text="🔍 搜索货品:", 
+                 font=("Microsoft YaHei UI", 9)).pack(side=tk.LEFT, padx=(0, 5))
+        
+        self.product_search_var = tk.StringVar()
+        self.product_search_entry = ttk.Entry(search_frame, 
+                                            textvariable=self.product_search_var,
+                                            font=("Microsoft YaHei UI", 9),
+                                            width=25)
+        self.product_search_entry.pack(side=tk.LEFT, fill=X, expand=True, padx=(0, 5))
+        self.product_search_var.trace('w', self.on_product_search)
+        
+        # 设置搜索框占位符
+        self.setup_product_search_placeholder()
+        
+        # 清除搜索按钮
+        clear_search_btn = ttk.Button(search_frame, text="清除", 
+                                    command=self.clear_product_search,
+                                    bootstyle="secondary-outline", width=6)
+        clear_search_btn.pack(side=tk.LEFT, padx=(0, 5))
+        
+        # 全选/取消全选按钮
+        select_all_btn = ttk.Button(search_frame, text="全选", 
+                                  command=self.select_all_products,
+                                  bootstyle="info-outline", width=6)
+        select_all_btn.pack(side=tk.LEFT, padx=(0, 2))
+        
+        select_none_btn = ttk.Button(search_frame, text="取消", 
+                                   command=self.select_none_products,
+                                   bootstyle="warning-outline", width=6)
+        select_none_btn.pack(side=tk.LEFT)
+        
+        # 商品计数显示
+        count_frame = ttk.Frame(self.product_listbox_frame)
+        count_frame.pack(fill=X, pady=(5, 0))
+        
+        self.product_count_label = ttk.Label(count_frame, text="", 
+                                           font=("Microsoft YaHei UI", 8),
+                                           foreground="#888")
+        self.product_count_label.pack(side=tk.LEFT)
+        
+        # 选择状态显示
+        self.selection_status_label = ttk.Label(count_frame, text="", 
+                                              font=("Microsoft YaHei UI", 8),
+                                              foreground="#4A90E2")
+        self.selection_status_label.pack(side=tk.RIGHT)
+        
+        # 商品列表框容器
+        listbox_container = ttk.Frame(self.product_listbox_frame)
+        listbox_container.pack(fill=BOTH, expand=True)
+        
+        try:
+            self.product_listbox = tk.Listbox(listbox_container, 
+                                            font=("Microsoft YaHei UI", 10),
+                                            height=6, selectmode=tk.MULTIPLE)
+            product_scrollbar = ttk.Scrollbar(listbox_container, orient=tk.VERTICAL, 
+                                            command=self.product_listbox.yview)
+            self.product_listbox.configure(yscrollcommand=product_scrollbar.set)
+            
+            self.product_listbox.pack(side=tk.LEFT, fill=BOTH, expand=True)
+            product_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            
+            # 绑定选择变化事件
+            self.product_listbox.bind("<<ListboxSelect>>", self.on_product_selection_changed)
+        except Exception as e:
+            print(f"创建product_listbox时出错: {e}")
+            # 创建一个空的占位符
+            self.product_listbox = None
+        
+        # 存储所有商品数据用于搜索
+        self.all_products = []
+        
+        # 初始状态禁用货品选择
+        self.product_listbox.configure(state=tk.DISABLED)
+        self.product_search_entry.configure(state=tk.DISABLED)
+        self.product_count_label.config(text="请先选择店铺")
+        row += 1
+        
         # 描述
         ttk.Label(main_frame, text="描述", font=("Microsoft YaHei UI", 11)).grid(
             row=row, column=0, padx=(0, 20), pady=(0, 18), sticky=tk.NW)
         self.entries['description'] = tk.Text(main_frame, font=("Microsoft YaHei UI", 11), 
-                                            width=28, height=4)
+                                            width=28, height=3)
         self.entries['description'].grid(row=row, column=1, pady=(0, 18), sticky=tk.EW)
         row += 1
         
@@ -2005,20 +2183,47 @@ class CouponEditorWindow(ttk.Toplevel):
         
         # 填充现有数据
         if self.coupon:
-            self.entries['shop'].insert(0, self.coupon.get('shop', ''))
-            self.coupon_type_var.set(self.coupon.get('coupon_type', 'fixed'))
-            self.entries['amount'].insert(0, str(self.coupon.get('amount', '')))
+            self.shop_var.set(self.coupon.get('shop', ''))
+            self.on_shop_changed()  # 加载商品列表
+            
+            coupon_type = self.coupon.get('coupon_type', 'instant')
+            self.coupon_type_var.set(coupon_type)
+            self.on_type_changed()  # 更新界面
+            
+            amount = self.coupon.get('amount', '')
+            if coupon_type == 'discount':
+                # 折扣券显示百分比
+                self.entries['amount'].insert(0, str(int(float(amount) * 100)))
+            else:
+                self.entries['amount'].insert(0, str(amount))
+                
             self.entries['min_price'].insert(0, str(self.coupon.get('min_price', '0')))
             self.entries['start_date'].insert(0, self.coupon.get('start_date', ''))
             self.entries['end_date'].insert(0, self.coupon.get('end_date', ''))
             self.entries['description'].insert('1.0', self.coupon.get('description', ''))
             self.is_active_var.set(bool(self.coupon.get('is_active', 1)))
+            
+            # 处理商品选择
+            product_ids_str = self.coupon.get('product_ids', '')
+            if product_ids_str:
+                try:
+                    product_ids = json.loads(product_ids_str)
+                    self.product_scope_var.set("specific")
+                    self.on_scope_changed()
+                    
+                    # 等待商品列表加载完成后选中对应的商品
+                    self.after(100, lambda: self.select_products_by_ids(product_ids))
+                except:
+                    pass
         else:
             # 默认日期
             from datetime import datetime, timedelta
             today = datetime.now()
             self.entries['start_date'].insert(0, today.strftime('%Y-%m-%d'))
             self.entries['end_date'].insert(0, (today + timedelta(days=30)).strftime('%Y-%m-%d'))
+            
+        # 初始化界面状态
+        self.on_type_changed()
         
         # 按钮区域
         button_frame = ttk.Frame(main_frame)
@@ -2029,30 +2234,259 @@ class CouponEditorWindow(ttk.Toplevel):
         ttk.Button(button_frame, text="保存", command=self.save, 
                   bootstyle="success", width=12).pack(side=RIGHT)
     
+    def on_shop_changed(self, event=None):
+        """店铺选择改变时加载货品列表"""
+        shop = self.shop_var.get()
+        if not shop:
+            self.all_products = []
+            if hasattr(self, 'product_listbox') and self.product_listbox is not None:
+                self.product_listbox.delete(0, tk.END)
+            return
+            
+        # 加载该店铺的货品（按货品ID去重）
+        products = database.get_products_by_shop(shop)
+        self.all_products = [(product_id, name) for product_id, name in products]
+        
+        # 更新货品列表显示
+        self.update_product_list()
+        
+        # 清空搜索框
+        self.product_search_var.set("")
+    
+    def on_type_changed(self):
+        """优惠券类型改变时更新界面"""
+        coupon_type = self.coupon_type_var.get()
+        
+        if coupon_type == 'instant':
+            # 立减券
+            self.amount_label.config(text="立减金额")
+            self.amount_unit_label.config(text="元")
+            self.min_price_label.grid_remove()
+            self.entries['min_price'].grid_remove()
+            
+        elif coupon_type == 'threshold':
+            # 满减券
+            self.amount_label.config(text="减免金额")
+            self.amount_unit_label.config(text="元")
+            self.min_price_label.grid()
+            self.entries['min_price'].grid()
+            
+        elif coupon_type == 'discount':
+            # 折扣券
+            self.amount_label.config(text="折扣")
+            self.amount_unit_label.config(text="%")
+            self.min_price_label.grid_remove()
+            self.entries['min_price'].grid_remove()
+    
+    def on_scope_changed(self):
+        """适用范围改变时更新界面"""
+        if not hasattr(self, 'product_listbox') or self.product_listbox is None:
+            return
+            
+        if self.product_scope_var.get() == "all":
+            self.product_listbox.configure(state=tk.DISABLED)
+            self.product_search_entry.configure(state=tk.DISABLED)
+            self.product_listbox.selection_clear(0, tk.END)
+            self.product_count_label.config(text="全店通用，无需选择货品")
+            self.selection_status_label.config(text="")
+        else:
+            self.product_listbox.configure(state=tk.NORMAL)
+            self.product_search_entry.configure(state=tk.NORMAL)
+            # 如果有货品数据，更新计数显示
+            if self.all_products:
+                self.update_product_list()
+                self.on_product_selection_changed(None)  # 更新选择状态
+            else:
+                self.product_count_label.config(text="请先选择店铺")
+                self.selection_status_label.config(text="")
+    
+    def update_product_list(self, search_term=""):
+        """更新货品列表显示"""
+        # 检查product_listbox是否存在
+        if not hasattr(self, 'product_listbox') or self.product_listbox is None:
+            print("警告: product_listbox 不存在，跳过更新")
+            return
+            
+        # 清空当前列表
+        self.product_listbox.delete(0, tk.END)
+        
+        # 根据搜索条件筛选货品
+        filtered_products = []
+        search_term = search_term.lower().strip()
+        
+        for product_id, name in self.all_products:
+            if not search_term or (search_term in product_id.lower() or search_term in name.lower()):
+                filtered_products.append((product_id, name))
+        
+        # 添加筛选后的货品到列表
+        for product_id, name in filtered_products:
+            display_text = f"{product_id} - {name}"
+            self.product_listbox.insert(tk.END, display_text)
+        
+        # 更新货品计数显示
+        total_count = len(self.all_products)
+        filtered_count = len(filtered_products)
+        
+        if search_term:
+            self.product_count_label.config(text=f"🔍 找到 {filtered_count} 个货品（共 {total_count} 个）")
+            if filtered_count == 0:
+                self.product_count_label.config(text=f"🔍 未找到匹配的货品（共 {total_count} 个）")
+        else:
+            self.product_count_label.config(text=f"📦 共 {total_count} 个货品")
+    
+    def on_product_search(self, *args):
+        """商品搜索框内容改变时触发"""
+        # 检查必要的属性是否存在
+        if not hasattr(self, 'product_search_var') or not hasattr(self, 'product_search_placeholder'):
+            return
+            
+        search_term = self.product_search_var.get()
+        # 如果是占位符文本，则不进行搜索
+        if search_term == self.product_search_placeholder:
+            search_term = ""
+        self.update_product_list(search_term)
+    
+    def clear_product_search(self):
+        """清除商品搜索"""
+        self.product_search_entry.delete(0, tk.END)
+        self.product_search_entry.insert(0, self.product_search_placeholder)
+        self.product_search_entry.configure(foreground=self.product_search_placeholder_color)
+        self.update_product_list()
+    
+    def select_products_by_ids(self, product_ids):
+        """根据货品ID列表选中对应的货品"""
+        if not product_ids or not hasattr(self, 'product_listbox') or self.product_listbox is None:
+            return
+            
+        try:
+            # 清除当前选择
+            self.product_listbox.selection_clear(0, tk.END)
+            
+            # 选中对应的货品
+            for i in range(self.product_listbox.size()):
+                product_text = self.product_listbox.get(i)
+                product_id = product_text.split(' - ')[0]
+                if product_id in product_ids:
+                    self.product_listbox.selection_set(i)
+        except Exception as e:
+            print(f"选择货品时出错: {e}")
+    
+    def setup_product_search_placeholder(self):
+        """设置货品搜索框占位符"""
+        self.product_search_placeholder = "输入货品ID或名称..."
+        self.product_search_placeholder_color = '#888'
+        
+        # 设置初始占位符
+        self.product_search_entry.insert(0, self.product_search_placeholder)
+        self.product_search_entry.configure(foreground=self.product_search_placeholder_color)
+        
+        # 绑定焦点事件
+        self.product_search_entry.bind("<FocusIn>", self.on_product_search_focus_in)
+        self.product_search_entry.bind("<FocusOut>", self.on_product_search_focus_out)
+    
+    def on_product_search_focus_in(self, event):
+        """货品搜索框获得焦点"""
+        if self.product_search_entry.get() == self.product_search_placeholder:
+            self.product_search_entry.delete(0, tk.END)
+            self.product_search_entry.configure(foreground='white')
+    
+    def on_product_search_focus_out(self, event):
+        """货品搜索框失去焦点"""
+        if not self.product_search_entry.get().strip():
+            self.product_search_entry.delete(0, tk.END)
+            self.product_search_entry.insert(0, self.product_search_placeholder)
+            self.product_search_entry.configure(foreground=self.product_search_placeholder_color)
+    
+    def select_all_products(self):
+        """全选当前显示的货品"""
+        if hasattr(self, 'product_listbox') and self.product_listbox is not None:
+            if self.product_listbox.cget('state') == tk.NORMAL:
+                self.product_listbox.selection_set(0, tk.END)
+    
+    def select_none_products(self):
+        """取消选择所有货品"""
+        if hasattr(self, 'product_listbox') and self.product_listbox is not None:
+            if self.product_listbox.cget('state') == tk.NORMAL:
+                self.product_listbox.selection_clear(0, tk.END)
+    
+    def on_product_selection_changed(self, event):
+        """货品选择变化时更新状态显示"""
+        if not hasattr(self, 'product_listbox') or self.product_listbox is None:
+            return
+            
+        if self.product_scope_var.get() == "specific":
+            selected_count = len(self.product_listbox.curselection())
+            if selected_count > 0:
+                self.selection_status_label.config(text=f"✓ 已选择 {selected_count} 个货品")
+            else:
+                self.selection_status_label.config(text="请选择货品")
+        else:
+            self.selection_status_label.config(text="")
+    
     def save(self):
         """保存优惠券"""
         try:
-            # 收集数据
+            # 收集基本数据
+            shop = self.shop_var.get().strip()
+            coupon_type = self.coupon_type_var.get()
+            amount_str = self.entries['amount'].get().strip()
+            min_price = float(self.entries['min_price'].get() or 0)
+            
+            # 验证基本数据
+            if not shop:
+                messagebox.showerror("错误", "请选择店铺", parent=self)
+                return
+            
+            if not amount_str:
+                messagebox.showerror("错误", "面额/折扣不能为空", parent=self)
+                return
+            
+            # 处理金额/折扣
+            if coupon_type == 'discount':
+                # 折扣券：输入的是百分比，存储为小数
+                discount_percent = float(amount_str)
+                if discount_percent <= 0 or discount_percent >= 100:
+                    messagebox.showerror("错误", "折扣必须在0-100之间", parent=self)
+                    return
+                amount = discount_percent / 100
+            else:
+                # 立减券和满减券：直接使用金额
+                amount = float(amount_str)
+                if amount <= 0:
+                    messagebox.showerror("错误", "金额必须大于0", parent=self)
+                    return
+            
+            # 处理货品选择
+            product_ids = []
+            if self.product_scope_var.get() == "specific":
+                if not hasattr(self, 'product_listbox') or self.product_listbox is None:
+                    messagebox.showerror("错误", "货品列表未正确初始化", parent=self)
+                    return
+                    
+                selected_indices = self.product_listbox.curselection()
+                if not selected_indices:
+                    messagebox.showerror("错误", "请选择适用的货品", parent=self)
+                    return
+                
+                for index in selected_indices:
+                    product_text = self.product_listbox.get(index)
+                    product_id = product_text.split(' - ')[0]
+                    product_ids.append(product_id)
+            
+            # 构建优惠券数据
             coupon_data = {
-                'shop': self.entries['shop'].get().strip(),
-                'coupon_type': self.coupon_type_var.get(),
-                'amount': float(self.entries['amount'].get() or 0),
-                'min_price': float(self.entries['min_price'].get() or 0),
+                'shop': shop,
+                'coupon_type': coupon_type,
+                'amount': amount,
+                'min_price': min_price,
                 'start_date': self.entries['start_date'].get().strip(),
                 'end_date': self.entries['end_date'].get().strip(),
                 'description': self.entries['description'].get('1.0', tk.END).strip(),
-                'is_active': 1 if self.is_active_var.get() else 0
+                'is_active': 1 if self.is_active_var.get() else 0,
+                'product_ids': json.dumps(product_ids) if product_ids else ''
             }
             
-            # 验证数据
-            if not coupon_data['shop']:
-                messagebox.showerror("错误", "店铺不能为空", parent=self)
-                return
-            
-            if coupon_data['amount'] <= 0:
-                messagebox.showerror("错误", "面额必须大于0", parent=self)
-                return
-            
+            # 验证日期
             if not coupon_data['start_date'] or not coupon_data['end_date']:
                 messagebox.showerror("错误", "开始日期和结束日期不能为空", parent=self)
                 return
@@ -2081,8 +2515,8 @@ class CouponEditorWindow(ttk.Toplevel):
             
             self.destroy()
             
-        except ValueError:
-            messagebox.showerror("错误", "面额和最低消费必须是有效的数字", parent=self)
+        except ValueError as e:
+            messagebox.showerror("错误", "请输入有效的数字", parent=self)
         except Exception as e:
             messagebox.showerror("保存失败", f"发生错误: {e}", parent=self)
 
