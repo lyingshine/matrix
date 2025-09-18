@@ -190,6 +190,9 @@ class App(ttk.Window):
         self.all_data_loaded = False
         self.last_clicked_row = None
         self.last_clicked_column_index = -1
+        
+        # 净利率筛选状态
+        self.current_profit_filter = None
 
         self._build_ui()
 
@@ -518,6 +521,11 @@ class App(ttk.Window):
             if page_name == "overview":
                 self._refresh_overview()
             elif page_name == "sku_list":
+                # 如果不是从价格分析页面跳转过来，清除筛选条件
+                if not hasattr(self, '_from_price_analysis') or not self._from_price_analysis:
+                    self.current_profit_filter = None
+                self._from_price_analysis = False
+                
                 # 确保tree已经创建后再加载数据
                 if hasattr(self, 'tree') and self.tree:
                     self.start_new_load(force=True)
@@ -1507,12 +1515,12 @@ class App(ttk.Window):
         stats_container = ttk.Frame(stats_area)
         stats_container.pack(fill=X)
         
-        # 价格分析统计卡片
+        # 价格分析统计卡片 - 按净利率档位统计
         analysis_stats = [
-            {"title": "总商品数", "value": "0", "icon": "📦", "color": "#4A90E2", "key": "total_products"},
-            {"title": "盈利商品", "value": "0", "icon": "📈", "color": "#7ED321", "key": "profitable_products"},
-            {"title": "亏损商品", "value": "0", "icon": "📉", "color": "#D0021B", "key": "loss_products"},
-            {"title": "平均利润率", "value": "0%", "icon": "💰", "color": "#F5A623", "key": "avg_profit_rate"}
+            {"title": "健康(≥20%)", "value": "0", "icon": "💚", "color": "#7ED321", "key": "healthy", "filter": "healthy"},
+            {"title": "一般(10-20%)", "value": "0", "icon": "💛", "color": "#F5A623", "key": "normal", "filter": "normal"},
+            {"title": "注意(0-10%)", "value": "0", "icon": "🟠", "color": "#FF9500", "key": "warning", "filter": "warning"},
+            {"title": "亏损(<0%)", "value": "0", "icon": "🔴", "color": "#D0021B", "key": "loss", "filter": "loss"}
         ]
         
         # 存储统计卡片引用
@@ -1522,6 +1530,13 @@ class App(ttk.Window):
             card = self._create_analysis_stat_card(stats_container, stat)
             card.grid(row=0, column=i, padx=(0, 15) if i < 3 else (0, 0), sticky="ew")
             self.analysis_stats_cards[stat["key"]] = card
+            
+            # 绑定点击事件，跳转到SKU页面并应用筛选
+            filter_type = stat.get("filter", "all")
+            card.bind("<Button-1>", lambda e, f=filter_type: self._jump_to_sku_with_filter(f))
+            # 为卡片内的所有子组件也绑定点击事件
+            for child in card.winfo_children():
+                self._bind_card_click_recursive(child, filter_type)
         
         # 配置网格权重
         for i in range(4):
@@ -1668,81 +1683,106 @@ class App(ttk.Window):
     def _refresh_price_analysis(self):
         """刷新价格分析数据"""
         try:
+            # 显示加载状态
+            self.update_status("正在分析价格数据...", "⏳", True)
+            
             # 清空现有数据
             for item in self.analysis_tree.get_children():
                 self.analysis_tree.delete(item)
             
             # 获取所有商品数据
-            all_products = database.get_all_products(limit=999999)
+            all_products = database.get_all_products(limit=999999)  # 获取所有数据
             
-            total_products = 0
-            profitable_products = 0
-            loss_products = 0
-            total_profit_rate = 0
+            # 按净利率档位统计
+            healthy_count = 0    # ≥20%
+            normal_count = 0     # 10-20%
+            warning_count = 0    # 0-10%
+            loss_count = 0       # <0%
             
-            for product in all_products:
-                product_dict = dict(zip(database.DB_COLUMNS, product))
+            total_products = len(all_products)
+            processed_count = 0
+            
+            # 分批处理数据，避免界面卡死
+            batch_size = 100
+            for i in range(0, len(all_products), batch_size):
+                batch = all_products[i:i+batch_size]
                 
-                # 计算到手价（应用优惠券）
-                price = float(product_dict.get('price', 0) or 0)
-                shop = product_dict.get('shop', '')
-                product_id = product_dict.get('product_id', '')
-                final_price = database.calculate_final_price(price, shop, product_id)
+                for product in batch:
+                    product_dict = dict(zip(database.DB_COLUMNS, product))
+                    
+                    # 简化计算，直接使用价格而不是复杂的优惠券计算
+                    price = float(product_dict.get('price', 0) or 0)
+                    purchase_price = float(product_dict.get('purchase_price', 0) or 0)
+                    
+                    # 跳过没有价格数据的商品，但采购价为空时设置为0
+                    if price <= 0:
+                        continue
+                    
+                    # 没有采购价的商品，采购价统一设置为0
+                    if purchase_price <= 0:
+                        purchase_price = 0
+                    
+                    # 使用简化的到手价计算（直接使用原价，避免复杂的优惠券计算）
+                    final_price = price
+                    
+                    # 计算各项费用
+                    shipping_fee = 30 if final_price >= 150 else 2
+                    after_sales_fee = final_price * 0.02  # 2%
+                    management_fee = final_price * 0.07   # 7%
+                    platform_fee = final_price * 0.01    # 1%
+                    misc_fee = after_sales_fee + management_fee + platform_fee
+                    
+                    # 计算净利润和净利率
+                    net_profit = final_price - purchase_price - shipping_fee - misc_fee
+                    net_margin_rate = (net_profit / final_price) * 100 if final_price > 0 else 0
+                    
+                    # 按净利率档位统计
+                    if net_margin_rate >= 20:
+                        healthy_count += 1
+                    elif net_margin_rate >= 10:
+                        normal_count += 1
+                    elif net_margin_rate >= 0:
+                        warning_count += 1
+                    else:
+                        loss_count += 1
+                    
+                    # 格式化显示数据
+                    display_data = [
+                        product_dict.get('shop', ''),
+                        product_dict.get('product_id', ''),
+                        product_dict.get('name', ''),
+                        f"¥{final_price:.2f}",
+                        f"¥{purchase_price:.2f}",
+                        f"¥{shipping_fee:.2f}",
+                        f"¥{misc_fee:.2f}",
+                        f"¥{net_profit:.2f}",
+                        f"{net_margin_rate:.1f}%"
+                    ]
+                    
+                    # 插入数据到表格
+                    self.analysis_tree.insert("", tk.END, values=display_data)
+                    
+                    processed_count += 1
                 
-                purchase_price = float(product_dict.get('purchase_price', 0) or 0)
-                
-                # 跳过没有价格数据的商品
-                if final_price <= 0 or purchase_price <= 0:
-                    continue
-                
-                # 计算各项费用
-                shipping_fee = 30 if final_price >= 150 else 2
-                after_sales_fee = final_price * 0.02  # 2%
-                management_fee = final_price * 0.07   # 7%
-                platform_fee = final_price * 0.01    # 1%
-                misc_fee = after_sales_fee + management_fee + platform_fee
-                
-                # 计算净利润
-                net_profit = final_price - purchase_price - shipping_fee - misc_fee
-                
-                # 计算利润率
-                profit_rate = (net_profit / final_price) * 100 if final_price > 0 else 0
-                
-                # 统计数据
-                total_products += 1
-                if net_profit > 0:
-                    profitable_products += 1
-                else:
-                    loss_products += 1
-                total_profit_rate += profit_rate
-                
-                # 格式化显示数据
-                display_data = [
-                    product_dict.get('shop', ''),
-                    product_dict.get('product_id', ''),
-                    product_dict.get('name', ''),
-                    f"¥{final_price:.2f}",
-                    f"¥{purchase_price:.2f}",
-                    f"¥{shipping_fee:.2f}",
-                    f"¥{misc_fee:.2f}",
-                    f"¥{net_profit:.2f}",
-                    f"{profit_rate:.1f}%"
-                ]
-                
-                # 插入数据到表格
-                self.analysis_tree.insert("", tk.END, values=display_data)
+                # 每处理一批数据后更新界面，避免卡死
+                progress = (processed_count / total_products) * 100 if total_products > 0 else 100
+                self.update_status(f"正在分析价格数据... {progress:.0f}%", "⏳", True)
+                self.update_idletasks()  # 强制更新界面
             
             # 更新统计卡片
-            avg_profit_rate = total_profit_rate / total_products if total_products > 0 else 0
-            
             if hasattr(self, 'analysis_stats_cards'):
-                self.analysis_stats_cards['total_products'].value_label.config(text=str(total_products))
-                self.analysis_stats_cards['profitable_products'].value_label.config(text=str(profitable_products))
-                self.analysis_stats_cards['loss_products'].value_label.config(text=str(loss_products))
-                self.analysis_stats_cards['avg_profit_rate'].value_label.config(text=f"{avg_profit_rate:.1f}%")
+                self.analysis_stats_cards['healthy'].value_label.config(text=str(healthy_count))
+                self.analysis_stats_cards['normal'].value_label.config(text=str(normal_count))
+                self.analysis_stats_cards['warning'].value_label.config(text=str(warning_count))
+                self.analysis_stats_cards['loss'].value_label.config(text=str(loss_count))
+            
+            # 更新完成状态
+            total_analyzed = healthy_count + normal_count + warning_count + loss_count
+            self.update_status(f"价格分析完成，共分析 {total_analyzed} 个商品", "✅", False)
                 
         except Exception as e:
             print(f"刷新价格分析数据时出错: {e}")
+            self.update_status("价格分析失败", "❌", False)
             messagebox.showerror("错误", f"刷新价格分析数据失败: {str(e)}")
     
     def _filter_analysis(self, filter_type):
@@ -1750,6 +1790,21 @@ class App(ttk.Window):
         # 这里可以实现筛选逻辑
         # 暂时重新加载所有数据
         self._refresh_price_analysis()
+    
+    def _bind_card_click_recursive(self, widget, filter_type):
+        """递归绑定卡片内所有子组件的点击事件"""
+        widget.bind("<Button-1>", lambda e, f=filter_type: self._jump_to_sku_with_filter(f))
+        for child in widget.winfo_children():
+            self._bind_card_click_recursive(child, filter_type)
+    
+    def _jump_to_sku_with_filter(self, filter_type):
+        """跳转到SKU页面并应用净利率筛选"""
+        # 设置筛选条件和标记
+        self.current_profit_filter = filter_type
+        self._from_price_analysis = True
+        
+        # 切换到SKU列表页面
+        self.show_page("sku_list")
     
     def open_coupon_manager(self):
         """打开优惠券管理窗口（保持兼容性）"""
@@ -1892,24 +1947,61 @@ class App(ttk.Window):
                     # 计算毛利率、净利率和快递费
                     purchase_price = float(product_dict.get('purchase_price', 0) or 0)
                     shipping_fee_display = ""
+                    
+                    # 没有采购价的商品，采购价统一设置为0
+                    if purchase_price <= 0:
+                        purchase_price = 0
+                    
+                    # 如果有净利率筛选条件，先计算净利率判断是否符合条件
+                    if hasattr(self, 'current_profit_filter') and self.current_profit_filter:
+                        if final_price > 0:
+                            # 使用与价格分析页面相同的计算方法
+                            shipping_fee = 30 if final_price >= 150 else 2
+                            after_sales_fee = final_price * 0.02  # 2%
+                            management_fee = final_price * 0.07   # 7%
+                            platform_fee = final_price * 0.01    # 1%
+                            misc_fee = after_sales_fee + management_fee + platform_fee
+                            
+                            # 计算净利润和净利率
+                            net_profit = final_price - purchase_price - shipping_fee - misc_fee
+                            net_margin_rate_percent = (net_profit / final_price) * 100 if final_price > 0 else 0
+                            
+                            # 根据筛选条件判断是否显示
+                            should_show = False
+                            if self.current_profit_filter == "healthy" and net_margin_rate_percent >= 20:
+                                should_show = True
+                            elif self.current_profit_filter == "normal" and 10 <= net_margin_rate_percent < 20:
+                                should_show = True
+                            elif self.current_profit_filter == "warning" and 0 <= net_margin_rate_percent < 10:
+                                should_show = True
+                            elif self.current_profit_filter == "loss" and net_margin_rate_percent < 0:
+                                should_show = True
+                            
+                            if not should_show:
+                                continue
                     gross_margin_rate = ""
                     net_margin_rate = ""
                     
-                    if final_price > 0 and purchase_price > 0:
+                    if final_price > 0:
                         # 计算快递费
                         shipping_fee = 30 if final_price >= 150 else 2
                         shipping_fee_display = f"¥{shipping_fee:.2f}"
                         
                         # 计算毛利率 = (到手价 - 采购价 - 快递费) / 到手价
+                        # 采购价为0时，毛利率会很高
                         gross_margin = final_price - purchase_price - shipping_fee
                         gross_margin_rate = f"{(gross_margin / final_price * 100):.1f}%"
                         
-                        # 计算杂费率 = 售后费用(2%) + 管理费用(7%) + 平台费用(1%) = 10%
-                        misc_fee_rate = 0.10  # 10%
+                        # 使用与价格分析页面相同的净利率计算方法
+                        after_sales_fee = final_price * 0.02  # 2%
+                        management_fee = final_price * 0.07   # 7%
+                        platform_fee = final_price * 0.01    # 1%
+                        misc_fee = after_sales_fee + management_fee + platform_fee
                         
-                        # 计算净利率 = 毛利率 - 杂费率
-                        net_margin_rate_value = (gross_margin / final_price) - misc_fee_rate
-                        net_margin_rate = f"{(net_margin_rate_value * 100):.1f}%"
+                        # 计算净利润和净利率
+                        net_profit = final_price - purchase_price - shipping_fee - misc_fee
+                        net_margin_rate_percent = (net_profit / final_price) * 100 if final_price > 0 else 0
+                        net_margin_rate = f"{net_margin_rate_percent:.1f}%"
                     
                     # 构建显示数据，包含到手价、采购价、快递费、毛利率和净利率
                     display_data = {}
