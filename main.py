@@ -22,7 +22,7 @@ DISPLAY_COLUMNS = [
     'shop', 'product_id', 'spec_id', 'sku', 'price', 
     'quantity', 'spec_name', 'name'
 ]
-PAGE_SIZE = 50  # Number of items to load per page
+PAGE_SIZE = 100  # Number of items to load per page - 增加页面大小减少加载次数
 SKELETON_ROWS = 15 # Number of placeholder rows to show
 
 # --- Editor Window (largely unchanged) ---
@@ -318,13 +318,15 @@ class App(ttk.Window):
         # 样式配置
         style = ttk.Style()
         
-        # 表格样式
+        # 表格样式 - 优化滚动性能
         style.configure('Custom.Treeview', 
                        rowheight=42,
                        font=("Microsoft YaHei UI", 11),
                        fieldbackground="#2b2b2b",
                        borderwidth=0,
-                       relief="flat")
+                       relief="flat",
+                       # 优化滚动性能
+                       selectmode="extended")
         
         # 表头样式
         style.configure('Custom.Treeview.Heading', 
@@ -352,7 +354,7 @@ class App(ttk.Window):
                        padding=(8, 6))
 
         self.tree = ttk.Treeview(tree_frame, columns=DISPLAY_COLUMNS, show="headings", 
-                               style="Custom.Treeview")
+                               style="Custom.Treeview", height=20)  # 限制可见行数提高性能
         
         # 配置列 - 所有数据居中显示，确保总宽度足够触发横向滚动
         column_configs = {
@@ -424,8 +426,17 @@ class App(ttk.Window):
         self.tree.bind("<Double-Button-1>", self.on_row_double_click)
         self.tree.bind("<Motion>", self.on_tree_motion)
         
-        # 鼠标滚轮支持横向滚动
+        # 鼠标滚轮支持 - 优化滚动体验
+        self.tree.bind("<MouseWheel>", self._on_mouse_wheel)
         self.tree.bind("<Shift-MouseWheel>", self._on_horizontal_scroll)
+        
+        # 键盘滚动支持
+        self.tree.bind("<Up>", self._on_key_scroll)
+        self.tree.bind("<Down>", self._on_key_scroll)
+        self.tree.bind("<Page_Up>", self._on_key_scroll)
+        self.tree.bind("<Page_Down>", self._on_key_scroll)
+        self.tree.bind("<Home>", self._on_key_scroll)
+        self.tree.bind("<End>", self._on_key_scroll)
 
         # --- 状态栏 ---
         status_frame = ttk.Frame(main_container, padding=(30, 15, 30, 20))
@@ -471,6 +482,11 @@ class App(ttk.Window):
         
         # 启动时间更新
         self.update_time()
+        
+        # 滚动优化设置
+        self._scroll_timer = None
+        self._last_scroll_time = 0
+        self._smooth_scroll_active = False
 
     def copy_to_clipboard(self, event=None):
         selected_items = self.tree.selection()
@@ -706,16 +722,36 @@ class App(ttk.Window):
             self.after(0, self.set_busy, False)
 
     def _on_page_load_complete(self, products, is_new_query):
+        # 暂时禁用重绘以提高性能
+        self.tree.configure(cursor="wait")
+        
         if is_new_query:
-            self.tree.delete(*self.tree.get_children())
-            self.tree.configure(style="Treeview") # Restore normal style
+            # 批量删除以提高性能
+            children = self.tree.get_children()
+            if children:
+                self.tree.delete(*children)
+            self.tree.configure(style="Custom.Treeview") # Restore normal style
             # Clear selection when loading new data
             self.last_clicked_row = None
             self.last_clicked_column_index = -1
 
-        for product_row in products:
-            reordered_values = [product_row[col] for col in DISPLAY_COLUMNS]
-            self.tree.insert("", tk.END, values=tuple(reordered_values))
+        # 批量插入数据以提高性能
+        if products:
+            items_to_insert = []
+            for product_row in products:
+                reordered_values = [product_row[col] for col in DISPLAY_COLUMNS]
+                items_to_insert.append(tuple(reordered_values))
+            
+            # 分批插入，避免界面卡顿
+            batch_size = 20
+            for i in range(0, len(items_to_insert), batch_size):
+                batch = items_to_insert[i:i+batch_size]
+                for values in batch:
+                    self.tree.insert("", tk.END, values=values)
+                
+                # 每批次后更新界面，保持响应性
+                if i + batch_size < len(items_to_insert):
+                    self.update_idletasks()
         
         self.current_offset += len(products)
         if self.current_offset >= self.total_items:
@@ -733,6 +769,9 @@ class App(ttk.Window):
         self.update_status(status_text, icon)
         self.info_label.config(text=info_text)
         self.data_stats_label.config(text=f"({self.current_offset}/{self.total_items})")
+        
+        # 恢复正常光标
+        self.tree.configure(cursor="")
         self.set_busy(False)
 
     # --- Event Handlers ---
@@ -744,18 +783,109 @@ class App(ttk.Window):
         # 检查是否需要懒加载更多数据
         if len(args) >= 2:
             first, last = args[0], args[1]
-            if float(last) > 0.9 and not self.is_busy and not self.all_data_loaded:
-                self.load_next_page()
+            if float(last) > 0.85 and not self.is_busy and not self.all_data_loaded:
+                # 提前触发加载，让滚动更顺畅
+                self.after_idle(self.load_next_page)
+    
+    def _on_mouse_wheel(self, event):
+        """处理鼠标滚轮垂直滚动 - 优化滚动速度和节流"""
+        import time
+        current_time = time.time()
+        
+        # 滚动节流 - 避免过于频繁的滚动
+        if current_time - self._last_scroll_time < 0.016:  # 约60fps
+            return "break"
+        
+        self._last_scroll_time = current_time
+        
+        # 计算滚动量 - 调整为更顺畅的滚动
+        delta = int(-1 * (event.delta / 120))
+        scroll_amount = delta * 2  # 适中的滚动量
+        
+        # 执行滚动
+        self.tree.yview_scroll(scroll_amount, "units")
+        
+        # 延迟检查懒加载，避免滚动时卡顿
+        if self._scroll_timer:
+            self.after_cancel(self._scroll_timer)
+        
+        self._scroll_timer = self.after(100, self._check_lazy_load)
+        
+        return "break"  # 阻止默认滚动行为
     
     def _on_horizontal_scroll(self, event):
-        """处理横向滚动（Shift+鼠标滚轮）"""
-        self.tree.xview_scroll(int(-1 * (event.delta / 120)), "units")
+        """处理横向滚动（Shift+鼠标滚轮）- 优化滚动速度"""
+        delta = int(-1 * (event.delta / 120))
+        scroll_amount = delta * 3  # 调整横向滚动速度，让横向滚动更明显
+        self.tree.xview_scroll(scroll_amount, "units")
+        return "break"
+    
+    def _check_lazy_load(self):
+        """检查是否需要懒加载 - 延迟执行避免滚动卡顿"""
+        try:
+            visible_range = self.tree.yview()
+            if len(visible_range) >= 2 and visible_range[1] > 0.85:
+                if not self.is_busy and not self.all_data_loaded:
+                    self.load_next_page()
+        except:
+            pass
+    
+    def smooth_scroll_to(self, target_position, steps=10):
+        """平滑滚动到指定位置"""
+        if self._smooth_scroll_active:
+            return
+            
+        try:
+            current_pos = self.tree.yview()[0]
+            step_size = (target_position - current_pos) / steps
+            
+            def scroll_step(step):
+                if step <= 0:
+                    self._smooth_scroll_active = False
+                    return
+                    
+                new_pos = current_pos + step_size * (steps - step + 1)
+                self.tree.yview_moveto(new_pos)
+                self.after(16, lambda: scroll_step(step - 1))  # 约60fps
+            
+            self._smooth_scroll_active = True
+            scroll_step(steps)
+        except:
+            self._smooth_scroll_active = False
+    
+    def _on_key_scroll(self, event):
+        """处理键盘滚动 - 优化响应速度"""
+        key = event.keysym
+        
+        if key == "Up":
+            self.tree.yview_scroll(-1, "units")
+        elif key == "Down":
+            self.tree.yview_scroll(1, "units")
+        elif key == "Page_Up":
+            self.tree.yview_scroll(-15, "units")  # 增加页面滚动量
+        elif key == "Page_Down":
+            self.tree.yview_scroll(15, "units")   # 增加页面滚动量
+        elif key == "Home":
+            self.tree.yview_moveto(0)
+        elif key == "End":
+            self.tree.yview_moveto(1)
+            # End键时立即检查懒加载
+            if not self.is_busy and not self.all_data_loaded:
+                self.after_idle(self.load_next_page)
+            
+        # 延迟检查懒加载
+        if key in ["Down", "Page_Down"]:
+            if self._scroll_timer:
+                self.after_cancel(self._scroll_timer)
+            self._scroll_timer = self.after(50, self._check_lazy_load)
+            
+        return "break"
     
     def _on_scroll(self, *args):
         """原始滚动处理方法（保持兼容性）"""
         first, last = args
-        if float(last) > 0.9 and not self.is_busy and not self.all_data_loaded:
-            self.load_next_page()
+        if float(last) > 0.85 and not self.is_busy and not self.all_data_loaded:
+            self.after_idle(self.load_next_page)
 
     def refresh_treeview(self): self.start_new_load(query="")
     def search_products(self, event=None): self.start_new_load()
